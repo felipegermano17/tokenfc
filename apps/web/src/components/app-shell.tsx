@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { Club } from "@/lib/data";
 import { withClubModal } from "@/lib/club-routing";
+import { useTokenFcSession } from "@/components/app-providers";
 import { AuthStatusPill } from "@/components/auth-status-pill";
 import {
   BalanceCapsule,
@@ -26,6 +28,12 @@ export function AppShell({
 }) {
   const rankingHref = activeClub ? withClubModal(activeClub.slug, "ranking") : "/?sheet=ranking";
   const balanceHref = activeClub ? withClubModal(activeClub.slug, "topup") : undefined;
+  const { state } = useTokenFcSession();
+  const resolvedBalance = useMemo(() => {
+    const liveBalance = state?.balanceTfcRaw ? Number(state.balanceTfcRaw) : Number.NaN;
+
+    return Number.isFinite(liveBalance) ? liveBalance : balance;
+  }, [balance, state?.balanceTfcRaw]);
 
   return (
     <div
@@ -64,7 +72,7 @@ export function AppShell({
             <Link className="app-shell-anchor app-shell-anchor-muted" href={rankingHref}>
               Ranking geral
             </Link>
-            <BalanceCapsule balance={balance} href={balanceHref} />
+            <BalanceCapsule balance={resolvedBalance} href={balanceHref} />
             <AuthStatusPill />
           </div>
         </div>

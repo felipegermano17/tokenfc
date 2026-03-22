@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import { PrivyClient } from "@privy-io/node";
 import { prisma } from "@tokenfc/db";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
+import deployments from "../../../packages/contracts/deployments/monad-testnet.json" with { type: "json" };
 
 const host = process.env.API_HOST ?? "0.0.0.0";
 const port = z.coerce.number().default(4000).parse(process.env.API_PORT ?? "4000");
+const workerUrl =
+  resolveFirstEnv(["WORKER_URL", "TOKENFC_WORKER_URL"]) ?? "http://127.0.0.1:4100";
 const privyAppId = resolveFirstEnv([
   "PRIVY_APP_ID",
   "NEXT_PUBLIC_PRIVY_APP_ID",
@@ -22,6 +26,7 @@ const privyClient =
         appSecret: privyAppSecret,
       })
     : null;
+
 const authSessionBodySchema = z.object({
   wallets: z
     .array(
@@ -36,6 +41,13 @@ const authSessionBodySchema = z.object({
 const selectClubBodySchema = z.object({
   clubSlug: z.string().trim().min(1),
 });
+const topupCreateBodySchema = z.object({
+  amountTfc: z.coerce.number().int().positive().max(500),
+});
+const topupApproveParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+type DbTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 const app = Fastify({
   logger: true,
@@ -65,12 +77,7 @@ app.post("/auth/session", async (request, reply) => {
 
   const body = authSessionBodySchema.parse(request.body ?? {});
   const wallets = normalizeWalletInputs(body.wallets);
-
-  const user = await prisma.user.upsert({
-    where: { privyUserId: session.user_id },
-    update: {},
-    create: { privyUserId: session.user_id },
-  });
+  const user = await ensureUserForSession(session.user_id);
 
   if (wallets.length) {
     await prisma.$transaction(
@@ -110,11 +117,7 @@ app.get("/auth/me", async (request, reply) => {
     return;
   }
 
-  const user = await prisma.user.upsert({
-    where: { privyUserId: session.user_id },
-    update: {},
-    create: { privyUserId: session.user_id },
-  });
+  const user = await ensureUserForSession(session.user_id);
 
   return {
     ok: true,
@@ -142,12 +145,7 @@ app.post("/onboarding/select-club", async (request, reply) => {
     return reply.code(404).send({ error: "Clube nao encontrado." });
   }
 
-  const user = await prisma.user.upsert({
-    where: { privyUserId: session.user_id },
-    update: {},
-    create: { privyUserId: session.user_id },
-  });
-
+  const user = await ensureUserForSession(session.user_id);
   const result = await prisma.$transaction(async (tx) => {
     const existingMembership = await tx.clubMembership.findUnique({
       where: { userId: user.id },
@@ -159,68 +157,50 @@ app.post("/onboarding/select-club", async (request, reply) => {
       };
     }
 
-    const membership =
-      existingMembership ??
-      (await tx.clubMembership.create({
+    if (!existingMembership) {
+      await tx.clubMembership.create({
         data: {
           userId: user.id,
           clubId: club.id,
         },
-      }));
+      });
+      await syncClubMetricsSupporterCount(tx, club.id);
+    }
+
     const primaryWallet = await tx.userWallet.findFirst({
       where: { userId: user.id },
       orderBy: { createdAt: "asc" },
     });
     const onboardingIntentKey = `onboarding-activation:${user.id}`;
-    const ledgerEntryKey = `ledger:onboarding-activation:${user.id}`;
     const existingIntent = await tx.transactionIntent.findUnique({
       where: { idempotencyKey: onboardingIntentKey },
     });
-    let welcomeGranted = false;
-
-    if (!existingIntent) {
-      const intent = await tx.transactionIntent.create({
+    const intent =
+      existingIntent ??
+      (await tx.transactionIntent.create({
         data: {
           userId: user.id,
           walletAddress: primaryWallet?.walletAddress ?? null,
           intentType: "onboarding_activation",
           sourceScreen: "onboarding",
           sourceAction: "select_club",
-          status: "ledger_posted",
+          targetContract: deployments.clubPass,
+          targetMethod: "mint+mint",
+          status: "intent_created",
           idempotencyKey: onboardingIntentKey,
           metadata: {
+            clubId: club.id.toString(),
             clubSlug: club.slug,
-            sponsorRequired: true,
-            futureChainActions: ["mint_club_pass", "grant_welcome_tfc"],
-          },
+            sponsorRequired: false,
+            workerChainActions: ["mint_club_pass", "mint_welcome_tfc"],
+          } as never,
         },
-      });
-
-      await tx.ledgerEntry.create({
-        data: {
-          userId: user.id,
-          clubId: club.id,
-          asset: "TFC",
-          direction: "credit",
-          amountRaw: "1",
-          reason: "welcome_tfc_grant",
-          sourceType: "onboarding_activation",
-          sourceId: intent.id,
-          transactionIntentId: intent.id,
-          idempotencyKey: ledgerEntryKey,
-          status: "posted",
-          effectiveAt: new Date(),
-        },
-      });
-
-      welcomeGranted = true;
-    }
+      }));
 
     return {
       clubSlug: club.slug,
-      clubPassStatus: membership.clubPassTokenId ? "active" : "pending",
+      intentId: intent.id,
       kind: "ok" as const,
-      welcomeGranted,
     };
   });
 
@@ -230,9 +210,174 @@ app.post("/onboarding/select-club", async (request, reply) => {
     });
   }
 
+  const workerResult = await enqueueWorkerIntent(result.intentId, request.log);
+  const state = await buildAppUserState(user.id);
+
   return {
     ok: true,
-    selection: result,
+    selection: {
+      clubSlug: result.clubSlug,
+      clubPassStatus: state.membership?.clubPassTokenId ? "active" : "pending",
+      intentId: result.intentId,
+      processingState: workerResult?.state ?? "queued",
+      welcomeGranted: BigInt(state.balanceTfcRaw) >= 1n,
+    },
+    ...state,
+  };
+});
+
+app.post("/topup/pix", async (request, reply) => {
+  const session = await authenticatePrivySession(request, reply);
+
+  if (!session) {
+    return;
+  }
+
+  const body = topupCreateBodySchema.parse(request.body ?? {});
+  const user = await ensureUserForSession(session.user_id);
+  const membership = await prisma.clubMembership.findUnique({
+    where: { userId: user.id },
+  });
+
+  if (!membership) {
+    return reply.code(409).send({
+      error: "Defina seu clube antes de adicionar saldo.",
+    });
+  }
+
+  const amountTfc = BigInt(body.amountTfc);
+  const topupOrder = await prisma.topupOrder.create({
+    data: {
+      userId: user.id,
+      brlAmount: body.amountTfc.toFixed(2),
+      tfcAmountRaw: amountTfc.toString(),
+      pixCode: generatePixCode(body.amountTfc),
+      pixQrPayload: generatePixCode(body.amountTfc),
+      customerStatus: "awaiting_payment",
+      internalStatus: "awaiting_payment",
+      idempotencyKey: `topup:${user.id}:${randomUUID()}`,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    },
+  });
+
+  const currentBalance = await getUserBalanceRaw(user.id);
+
+  return {
+    ok: true,
+    order: {
+      brlAmount: topupOrder.brlAmount.toString(),
+      customerStatus: topupOrder.customerStatus,
+      expiresAt: topupOrder.expiresAt,
+      id: topupOrder.id,
+      pixCode: topupOrder.pixCode,
+      pixQrPayload: topupOrder.pixQrPayload,
+      tfcAmountRaw: topupOrder.tfcAmountRaw.toString(),
+    },
+    projectedBalanceTfcRaw: (currentBalance + amountTfc).toString(),
+  };
+});
+
+app.post("/topup/pix/:id/approve", async (request, reply) => {
+  const session = await authenticatePrivySession(request, reply);
+
+  if (!session) {
+    return;
+  }
+
+  const params = topupApproveParamsSchema.parse(request.params);
+  const user = await ensureUserForSession(session.user_id);
+  const result = await prisma.$transaction(async (tx) => {
+    const topupOrder = await tx.topupOrder.findUnique({
+      where: { id: params.id },
+      include: {
+        user: {
+          include: {
+            membership: true,
+            wallets: {
+              orderBy: { createdAt: "asc" },
+            },
+          },
+        },
+      },
+    });
+
+    if (!topupOrder || topupOrder.userId !== user.id) {
+      return {
+        kind: "not_found" as const,
+      };
+    }
+
+    let mintIntentId = topupOrder.mintIntentId;
+
+    if (!mintIntentId) {
+      const mintIntent = await tx.transactionIntent.create({
+        data: {
+          userId: user.id,
+          walletAddress: topupOrder.user.wallets[0]?.walletAddress ?? null,
+          intentType: "topup_mint",
+          sourceScreen: "topup",
+          sourceAction: "approve_pix_mock",
+          targetContract: deployments.tfcToken,
+          targetMethod: "mint",
+          status: "intent_created",
+          idempotencyKey: `topup-mint:${topupOrder.id}`,
+          metadata: {
+            clubId: topupOrder.user.membership?.clubId.toString() ?? null,
+            sourceOrderId: topupOrder.id,
+            tfcAmountRaw: topupOrder.tfcAmountRaw.toString(),
+            workerChainActions: ["mint_topup_tfc"],
+          } as never,
+        },
+      });
+      mintIntentId = mintIntent.id;
+    }
+
+    const updatedOrder = await tx.topupOrder.update({
+      where: { id: topupOrder.id },
+      data: {
+        approvedAt: topupOrder.approvedAt ?? new Date(),
+        approvedBy: topupOrder.approvedBy ?? "mock_pix_approval",
+        customerStatus:
+          topupOrder.customerStatus === "completed"
+            ? "completed"
+            : "payment_approved_mock",
+        internalStatus:
+          topupOrder.internalStatus === "completed"
+            ? "completed"
+            : "mint_requested",
+        mintIntentId,
+      },
+    });
+
+    return {
+      kind: "ok" as const,
+      mintIntentId,
+      orderId: updatedOrder.id,
+    };
+  });
+
+  if (result.kind === "not_found") {
+    return reply.code(404).send({
+      error: "Ordem de topup nao encontrada.",
+    });
+  }
+
+  const workerResult = await enqueueWorkerIntent(result.mintIntentId, request.log);
+  const refreshedOrder = await prisma.topupOrder.findUnique({
+    where: { id: result.orderId },
+  });
+
+  return {
+    ok: true,
+    order: refreshedOrder
+      ? {
+          customerStatus: refreshedOrder.customerStatus,
+          id: refreshedOrder.id,
+          internalStatus: refreshedOrder.internalStatus,
+          tfcAmountRaw: refreshedOrder.tfcAmountRaw.toString(),
+        }
+      : null,
+    processingState: workerResult?.state ?? "queued",
     ...(await buildAppUserState(user.id)),
   };
 });
@@ -315,7 +460,10 @@ app.get("/rankings", async () => {
   });
 
   const biggest = [...clubs]
-    .sort((left, right) => (right.metrics?.supportersCount ?? 0) - (left.metrics?.supportersCount ?? 0))
+    .sort(
+      (left, right) =>
+        (right.metrics?.supportersCount ?? 0) - (left.metrics?.supportersCount ?? 0),
+    )
     .map((club) => ({
       club: club.name,
       slug: club.slug,
@@ -482,7 +630,9 @@ async function authenticatePrivySession(
   }
 }
 
-function normalizeWalletInputs(wallets: Array<z.infer<typeof authSessionBodySchema>["wallets"][number]>) {
+function normalizeWalletInputs(
+  wallets: Array<z.infer<typeof authSessionBodySchema>["wallets"][number]>,
+) {
   const byAddress = new Map<
     string,
     {
@@ -505,20 +655,55 @@ function normalizeWalletInputs(wallets: Array<z.infer<typeof authSessionBodySche
   return [...byAddress.values()];
 }
 
+async function ensureUserForSession(privyUserId: string) {
+  return prisma.user.upsert({
+    where: { privyUserId },
+    update: {},
+    create: { privyUserId },
+  });
+}
+
 async function buildAppUserState(userId: string) {
-  const [membership, wallets, balanceTfcRaw] = await Promise.all([
-    prisma.clubMembership.findUnique({
-      where: { userId },
-      include: { club: true },
-    }),
-    prisma.userWallet.findMany({
-      where: { userId },
-      orderBy: { createdAt: "asc" },
-    }),
-    getUserBalanceRaw(userId),
-  ]);
+  const [membership, wallets, balanceTfcRaw, latestOnboardingIntent, latestTopupOrder] =
+    await Promise.all([
+      prisma.clubMembership.findUnique({
+        where: { userId },
+        include: { club: true },
+      }),
+      prisma.userWallet.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" },
+      }),
+      getUserBalanceRaw(userId),
+      prisma.transactionIntent.findFirst({
+        where: {
+          userId,
+          intentType: "onboarding_activation",
+        },
+        orderBy: { requestedAt: "desc" },
+      }),
+      prisma.topupOrder.findFirst({
+        where: { userId },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
 
   return {
+    activation: latestOnboardingIntent
+      ? {
+          intentId: latestOnboardingIntent.id,
+          status: latestOnboardingIntent.status,
+        }
+      : null,
+    balanceTfcRaw: balanceTfcRaw.toString(),
+    latestTopup: latestTopupOrder
+      ? {
+          customerStatus: latestTopupOrder.customerStatus,
+          id: latestTopupOrder.id,
+          internalStatus: latestTopupOrder.internalStatus,
+          tfcAmountRaw: latestTopupOrder.tfcAmountRaw.toString(),
+        }
+      : null,
     membership: membership
       ? {
           clubId: membership.clubId.toString(),
@@ -533,7 +718,6 @@ async function buildAppUserState(userId: string) {
       isEmbedded: wallet.isEmbedded,
       provider: wallet.provider,
     })),
-    balanceTfcRaw: balanceTfcRaw.toString(),
   };
 }
 
@@ -553,4 +737,69 @@ async function getUserBalanceRaw(userId: string) {
     const amount = BigInt(entry.amountRaw.toString());
     return entry.direction === "credit" ? total + amount : total - amount;
   }, 0n);
+}
+
+async function enqueueWorkerIntent(
+  intentId: string,
+  logger?: {
+    warn: (...args: unknown[]) => void;
+  },
+) {
+  try {
+    const response = await fetch(`${workerUrl}/jobs/intents/${intentId}/process`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      logger?.warn(
+        { intentId, payload, workerUrl },
+        "Worker respondeu com erro ao processar intent",
+      );
+      return null;
+    }
+
+    const payload = (await response.json()) as {
+      result?: {
+        state?: string;
+      };
+    };
+    return payload.result ?? null;
+  } catch (error) {
+    logger?.warn(
+      { error, intentId, workerUrl },
+      "Nao foi possivel acionar o worker para esta intent",
+    );
+    return null;
+  }
+}
+
+function generatePixCode(amountTfc: number) {
+  const amountBlock = String(amountTfc).padStart(3, "0");
+  return `00020126580014BR.GOV.BCB.PIX0136TOKENFC-PIX${amountBlock}5204000053039865802BR5925TOKEN FC PIX6009SAO PAULO62070503***6304ABCD`;
+}
+
+async function syncClubMetricsSupporterCount(
+  tx: DbTransaction,
+  clubId: bigint,
+) {
+  const supportersCount = await tx.clubMembership.count({
+    where: { clubId },
+  });
+
+  await tx.clubMetrics.upsert({
+    where: { clubId },
+    update: {
+      supportersCount,
+    },
+    create: {
+      clubId,
+      supportersCount,
+    },
+  });
 }
