@@ -1,10 +1,11 @@
 import { prisma } from "@tokenfc/db";
 import Fastify from "fastify";
+import { createPublicClient, createWalletClient, decodeEventLog, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { createPublicClient, createWalletClient, http } from "viem";
 import { monadTestnet } from "viem/chains";
 import { z } from "zod";
 import {
+  clubContestAbi,
   clubPassAbi,
   tfcTokenAbi,
   toOnchainTfcUnits,
@@ -42,6 +43,22 @@ const walletClient = operatorAccount
 
 const processIntentParamsSchema = z.object({
   id: z.string().uuid(),
+});
+const txHashSchema = z.string().regex(/^0x[a-fA-F0-9]{64}$/);
+const bytes32Schema = z.string().regex(/^0x[a-fA-F0-9]{64}$/);
+const contestSupportMetadataSchema = z.object({
+  amountRaw: z.string().trim().min(1),
+  contestId: z.string().uuid(),
+  contestOnchainId: z.string().trim().min(1),
+  designId: z.string().uuid(),
+  designOnchainId: z.string().trim().min(1),
+  intentRef: bytes32Schema,
+  txHash: txHashSchema,
+});
+const shopCheckoutMetadataSchema = z.object({
+  priceTfcRaw: z.string().trim().min(1),
+  productId: z.string().uuid(),
+  productName: z.string().trim().min(1),
 });
 
 const app = Fastify({
@@ -112,6 +129,14 @@ async function processIntent(intentId: string) {
     return processTopupMintIntent(intent);
   }
 
+  if (intent.intentType === "contest_support") {
+    return processContestSupportIntent(intent);
+  }
+
+  if (intent.intentType === "shop_checkout") {
+    return processShopCheckoutIntent(intent);
+  }
+
   throw new Error(`Intent type nao suportado pelo worker: ${intent.intentType}`);
 }
 
@@ -119,6 +144,11 @@ async function loadIntentForProcessing(intentId: string) {
   return prisma.transactionIntent.findUnique({
     where: { id: intentId },
     include: {
+      shopOrders: {
+        include: {
+          product: true,
+        },
+      },
       topups: true,
       user: {
         include: {
@@ -456,6 +486,405 @@ async function processTopupMintIntent(
   };
 }
 
+async function processContestSupportIntent(
+  intent: NonNullable<LoadedIntent>,
+) {
+  const primaryWallet = intent.user?.wallets[0];
+  const membership = intent.user?.membership;
+  const metadata = contestSupportMetadataSchema.parse(
+    normalizeJsonObject(intent.metadata) ?? {},
+  );
+
+  if (!primaryWallet || !membership || !intent.userId) {
+    throw new Error("Apoio sem clube, wallet principal ou usuario.");
+  }
+
+  const userId = intent.userId;
+
+  const existingLedger = await prisma.ledgerEntry.findUnique({
+    where: {
+      idempotencyKey: `ledger:contest-support:${intent.id}`,
+    },
+  });
+  const existingSupport = await prisma.contestSupport.findFirst({
+    where: {
+      transactionIntentId: intent.id,
+    },
+  });
+
+  if (existingLedger && existingSupport) {
+    await prisma.transactionIntent.update({
+      where: { id: intent.id },
+      data: {
+        finalizedAt: intent.finalizedAt ?? new Date(),
+        status: "completed",
+      },
+    });
+
+    return {
+      contestSupportId: existingSupport.id,
+      intentId: intent.id,
+      state: "already_completed",
+      txHash: metadata.txHash,
+    };
+  }
+
+  const txHash = metadata.txHash as `0x${string}`;
+  const supportReceipt = await publicClient.waitForTransactionReceipt({
+    hash: txHash,
+  });
+
+  if (supportReceipt.status !== "success") {
+    throw new Error("O apoio nao foi confirmado na rede.");
+  }
+
+  if (
+    supportReceipt.from.toLowerCase() !==
+    primaryWallet.walletAddress.toLowerCase()
+  ) {
+    throw new Error("A transacao confirmada nao saiu da wallet principal da conta.");
+  }
+
+  const supportEvent = findSupportAddedEvent(supportReceipt.logs, metadata.intentRef);
+
+  if (!supportEvent) {
+    throw new Error("Nao encontramos o evento de apoio esperado para esta intent.");
+  }
+
+  if (
+    supportEvent.contestId.toString() !== metadata.contestOnchainId ||
+    supportEvent.designId.toString() !== metadata.designOnchainId
+  ) {
+    throw new Error("O apoio confirmado nao bate com a campanha preparada.");
+  }
+
+  const amountRaw = BigInt(metadata.amountRaw);
+
+  if (supportEvent.amount !== toOnchainTfcUnits(amountRaw)) {
+    throw new Error("O valor confirmado na rede nao bate com a intent.");
+  }
+
+  if (
+    supportEvent.supporter.toLowerCase() !==
+    primaryWallet.walletAddress.toLowerCase()
+  ) {
+    throw new Error("O apoio confirmado pertence a outra wallet.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const chainTransaction = await tx.chainTransaction.upsert({
+      where: {
+        txHash,
+      },
+      update: {
+        blockNumber: supportReceipt.blockNumber,
+        fromAddress: supportReceipt.from,
+        method: "supportDesign",
+        network: "monad-testnet",
+        proposedAt: intent.requestedAt,
+        rawReceipt: normalizeForJson(supportReceipt),
+        stage: "contest_support",
+        status: "verified",
+        toContract: tokenFcDeployments.clubContest,
+        verifiedAt: new Date(),
+      },
+      create: {
+        txHash,
+        network: "monad-testnet",
+        stage: "contest_support",
+        fromAddress: supportReceipt.from,
+        toContract: tokenFcDeployments.clubContest,
+        method: "supportDesign",
+        status: "verified",
+        blockNumber: supportReceipt.blockNumber,
+        proposedAt: intent.requestedAt,
+        verifiedAt: new Date(),
+        rawReceipt: normalizeForJson(supportReceipt),
+      },
+    });
+
+    const priorSupports = await tx.contestSupport.findMany({
+      where: {
+        contestId: metadata.contestId,
+        designId: metadata.designId,
+        status: "confirmed",
+        userId,
+      },
+      select: {
+        incrementTfcRaw: true,
+      },
+    });
+    const cumulativeRaw =
+      priorSupports.reduce(
+        (total, entry) => total + BigInt(entry.incrementTfcRaw.toString()),
+        0n,
+      ) + amountRaw;
+
+    const supportRecord = existingSupport
+      ? await tx.contestSupport.update({
+          where: { id: existingSupport.id },
+          data: {
+            chainTransactionId: chainTransaction.id,
+            clubId: membership.clubId,
+            contestId: metadata.contestId,
+            cumulativeTfcRaw: cumulativeRaw.toString(),
+            designId: metadata.designId,
+            incrementTfcRaw: amountRaw.toString(),
+            status: "confirmed",
+            userId,
+          },
+        })
+      : await tx.contestSupport.create({
+          data: {
+            chainTransactionId: chainTransaction.id,
+            clubId: membership.clubId,
+            contestId: metadata.contestId,
+            cumulativeTfcRaw: cumulativeRaw.toString(),
+            designId: metadata.designId,
+            incrementTfcRaw: amountRaw.toString(),
+            status: "confirmed",
+            transactionIntentId: intent.id,
+            userId,
+          },
+        });
+
+    await tx.transactionIntent.update({
+      where: { id: intent.id },
+      data: {
+        chainTransactionId: chainTransaction.id,
+        finalizedAt: new Date(),
+        metadata: mergeJsonObject(intent.metadata, {
+          supportTxHash: txHash,
+          workerProcessedAt: new Date().toISOString(),
+        }),
+        status: "completed",
+      },
+    });
+
+    await tx.ledgerEntry.upsert({
+      where: {
+        idempotencyKey: `ledger:contest-support:${intent.id}`,
+      },
+      update: {
+        chainTransactionId: chainTransaction.id,
+        status: "posted",
+      },
+      create: {
+        userId: intent.userId,
+        clubId: membership.clubId,
+        asset: "TFC",
+        direction: "debit",
+        amountRaw: amountRaw.toString(),
+        reason: "contest_support",
+        sourceType: "contest_support",
+        sourceId: supportRecord.id,
+        transactionIntentId: intent.id,
+        chainTransactionId: chainTransaction.id,
+        idempotencyKey: `ledger:contest-support:${intent.id}`,
+        status: "posted",
+        effectiveAt: new Date(),
+      },
+    });
+
+    await tx.clubMetrics.upsert({
+      where: { clubId: membership.clubId },
+      update: {
+        tfcSupportVolumeRaw: {
+          increment: amountRaw.toString(),
+        },
+        tfcTotalPowerRaw: {
+          increment: amountRaw.toString(),
+        },
+      },
+      create: {
+        clubId: membership.clubId,
+        supportersCount: await tx.clubMembership.count({
+          where: {
+            clubId: membership.clubId,
+          },
+        }),
+        tfcSupportVolumeRaw: amountRaw.toString(),
+        tfcTotalPowerRaw: amountRaw.toString(),
+      },
+    });
+  });
+
+  return {
+    intentId: intent.id,
+    state: "completed",
+    txHash,
+  };
+}
+
+async function processShopCheckoutIntent(
+  intent: NonNullable<LoadedIntent>,
+) {
+  if (!walletClient || !operatorAccount) {
+    throw new Error("Signer operacional indisponivel.");
+  }
+
+  const shopOrder = intent.shopOrders[0];
+  const primaryWallet = intent.user?.wallets[0];
+  const membership = intent.user?.membership;
+  const metadata = shopCheckoutMetadataSchema.parse(
+    normalizeJsonObject(intent.metadata) ?? {},
+  );
+
+  if (!shopOrder || !primaryWallet || !intent.userId) {
+    throw new Error("Checkout sem pedido, wallet principal ou usuario.");
+  }
+
+  const existingLedger = await prisma.ledgerEntry.findUnique({
+    where: {
+      idempotencyKey: `ledger:shop:${shopOrder.id}`,
+    },
+  });
+
+  if (existingLedger && shopOrder.customerStatus === "completed") {
+    await prisma.transactionIntent.update({
+      where: { id: intent.id },
+      data: {
+        finalizedAt: intent.finalizedAt ?? new Date(),
+        status: "completed",
+      },
+    });
+
+    return {
+      intentId: intent.id,
+      orderId: shopOrder.id,
+      state: "already_completed",
+    };
+  }
+
+  const amountRaw = BigInt(metadata.priceTfcRaw);
+  const burnTxHash = await walletClient.writeContract({
+    address: tokenFcDeployments.tfcToken,
+    abi: tfcTokenAbi,
+    functionName: "burn",
+    args: [primaryWallet.walletAddress as `0x${string}`, toOnchainTfcUnits(amountRaw)],
+    gas: 120_000n,
+    chain: monadTestnet,
+    account: operatorAccount,
+  });
+
+  const burnReceipt = await publicClient.waitForTransactionReceipt({
+    hash: burnTxHash,
+  });
+
+  if (burnReceipt.status !== "success") {
+    throw new Error("A compra nao foi confirmada na rede.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const chainTransaction = await tx.chainTransaction.upsert({
+      where: {
+        txHash: burnTxHash,
+      },
+      update: {
+        blockNumber: burnReceipt.blockNumber,
+        fromAddress: operatorAccount.address,
+        method: "burn",
+        network: "monad-testnet",
+        proposedAt: intent.requestedAt,
+        rawReceipt: normalizeForJson(burnReceipt),
+        stage: "shop_checkout_burn",
+        status: "verified",
+        toContract: tokenFcDeployments.tfcToken,
+        verifiedAt: new Date(),
+      },
+      create: {
+        txHash: burnTxHash,
+        network: "monad-testnet",
+        stage: "shop_checkout_burn",
+        fromAddress: operatorAccount.address,
+        toContract: tokenFcDeployments.tfcToken,
+        method: "burn",
+        status: "verified",
+        blockNumber: burnReceipt.blockNumber,
+        proposedAt: intent.requestedAt,
+        verifiedAt: new Date(),
+        rawReceipt: normalizeForJson(burnReceipt),
+      },
+    });
+
+    await tx.transactionIntent.update({
+      where: { id: intent.id },
+      data: {
+        chainTransactionId: chainTransaction.id,
+        finalizedAt: new Date(),
+        metadata: mergeJsonObject(intent.metadata, {
+          checkoutBurnTxHash: burnTxHash,
+          workerProcessedAt: new Date().toISOString(),
+        }),
+        status: "completed",
+      },
+    });
+
+    await tx.ledgerEntry.upsert({
+      where: {
+        idempotencyKey: `ledger:shop:${shopOrder.id}`,
+      },
+      update: {
+        chainTransactionId: chainTransaction.id,
+        status: "posted",
+      },
+      create: {
+        userId: intent.userId,
+        clubId: membership?.clubId ?? shopOrder.clubId,
+        asset: "TFC",
+        direction: "debit",
+        amountRaw: amountRaw.toString(),
+        reason: "shop_checkout",
+        sourceType: "shop_order",
+        sourceId: shopOrder.id,
+        transactionIntentId: intent.id,
+        chainTransactionId: chainTransaction.id,
+        idempotencyKey: `ledger:shop:${shopOrder.id}`,
+        status: "posted",
+        effectiveAt: new Date(),
+      },
+    });
+
+    await tx.shopOrder.update({
+      where: { id: shopOrder.id },
+      data: {
+        customerStatus: "completed",
+        fulfillmentStatus: "confirmed",
+        internalStatus: "completed",
+      },
+    });
+
+    await tx.clubMetrics.upsert({
+      where: { clubId: shopOrder.clubId },
+      update: {
+        tfcShopVolumeRaw: {
+          increment: amountRaw.toString(),
+        },
+        tfcTotalPowerRaw: {
+          increment: amountRaw.toString(),
+        },
+      },
+      create: {
+        clubId: shopOrder.clubId,
+        supportersCount: await tx.clubMembership.count({
+          where: {
+            clubId: shopOrder.clubId,
+          },
+        }),
+        tfcShopVolumeRaw: amountRaw.toString(),
+        tfcTotalPowerRaw: amountRaw.toString(),
+      },
+    });
+  });
+
+  return {
+    burnTxHash,
+    intentId: intent.id,
+    orderId: shopOrder.id,
+    state: "completed",
+  };
+}
+
 function resolveFirstEnv(keys: string[]) {
   for (const key of keys) {
     const value = process.env[key]?.trim();
@@ -496,4 +925,47 @@ function mergeJsonObject(
     ...(normalizeJsonObject(existing) ?? {}),
     ...additions,
   } as never;
+}
+
+function findSupportAddedEvent(
+  logs: Array<{
+    address: string;
+    data: string;
+    topics: readonly string[];
+  }>,
+  intentRef: string,
+) {
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== tokenFcDeployments.clubContest.toLowerCase()) {
+      continue;
+    }
+
+    try {
+      const decoded = decodeEventLog({
+        abi: clubContestAbi,
+        data: log.data as `0x${string}`,
+        topics: log.topics as [] | [`0x${string}`, ...`0x${string}`[]],
+      });
+
+      if (decoded.eventName !== "SupportAdded") {
+        continue;
+      }
+
+      if (decoded.args.intentId.toLowerCase() !== intentRef.toLowerCase()) {
+        continue;
+      }
+
+      return {
+        amount: decoded.args.amount,
+        contestId: decoded.args.contestId,
+        designId: decoded.args.designId,
+        intentId: decoded.args.intentId,
+        supporter: decoded.args.supporter,
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }

@@ -4,6 +4,7 @@ import { GoogleAuth } from "google-auth-library";
 import { PrivyClient } from "@privy-io/node";
 import { prisma } from "@tokenfc/db";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { encodeFunctionData, keccak256, parseAbi, toBytes, toHex } from "viem";
 import { z } from "zod";
 import deployments from "../../../packages/contracts/deployments/monad-testnet.json" with { type: "json" };
 
@@ -52,7 +53,56 @@ const topupCreateBodySchema = z.object({
 const topupApproveParamsSchema = z.object({
   id: z.string().uuid(),
 });
+const contestSupportPrepareParamsSchema = z.object({
+  contestId: z.string().uuid(),
+});
+const contestSupportPrepareBodySchema = z.object({
+  amountTfc: z.coerce.number().int().positive().max(500),
+  designId: z.string().uuid(),
+});
+const contestSupportConfirmParamsSchema = z.object({
+  contestId: z.string().uuid(),
+  intentId: z.string().uuid(),
+});
+const contestSupportConfirmBodySchema = z.object({
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+});
+const shopCheckoutBodySchema = z.object({
+  productId: z.string().uuid(),
+});
 type DbTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+type BalanceClient = Pick<typeof prisma, "ledgerEntry"> | Pick<DbTransaction, "ledgerEntry">;
+type ActivityItemPayload = {
+  amount: string;
+  detail: string;
+  status: string;
+  time: string;
+  title: string;
+};
+type LatestSupportState = {
+  contestId: string;
+  contestTitle: string;
+  cumulativeTfcRaw: string;
+  designId: string;
+  designTitle: string;
+  incrementTfcRaw: string;
+  status: string;
+} | null;
+type LatestOrderState = {
+  customerStatus: string;
+  fulfillmentStatus: string;
+  id: string;
+  priceTfcRaw: string;
+  productId: string;
+  productName: string;
+} | null;
+
+const MONAD_TESTNET_CHAIN_ID = 10143;
+const SUPPORT_GAS_LIMIT = 260_000;
+const ONE_TFC_ONCHAIN = 10n ** 18n;
+const clubContestSupportAbi = parseAbi([
+  "function supportDesign(uint256 contestId, uint256 designId, uint256 amount, bytes32 intentId)",
+]);
 
 const app = Fastify({
   logger: true,
@@ -387,6 +437,450 @@ app.post("/topup/pix/:id/approve", async (request, reply) => {
   };
 });
 
+app.get("/me/activity", async (request, reply) => {
+  const session = await authenticatePrivySession(request, reply);
+
+  if (!session) {
+    return;
+  }
+
+  const user = await ensureUserForSession(session.user_id);
+  const activity = await buildUserActivityData(user.id);
+
+  return {
+    ok: true,
+    ...activity,
+  };
+});
+
+app.post("/contests/:contestId/support/prepare", async (request, reply) => {
+  const session = await authenticatePrivySession(request, reply);
+
+  if (!session) {
+    return;
+  }
+
+  const params = contestSupportPrepareParamsSchema.parse(request.params);
+  const body = contestSupportPrepareBodySchema.parse(request.body ?? {});
+  const user = await ensureUserForSession(session.user_id);
+  const amountRaw = BigInt(body.amountTfc);
+  const balanceTfcRaw = await getUserBalanceRaw(user.id);
+  const result = await prisma.$transaction(async (tx) => {
+    const [contest, membership, primaryWallet] = await Promise.all([
+      tx.contest.findUnique({
+        where: { id: params.contestId },
+        include: {
+          designs: true,
+        },
+      }),
+      tx.clubMembership.findUnique({
+        where: { userId: user.id },
+      }),
+      tx.userWallet.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: "asc" },
+      }),
+    ]);
+
+    if (!membership) {
+      return {
+        kind: "membership_required" as const,
+      };
+    }
+
+    if (!contest) {
+      return {
+        kind: "contest_not_found" as const,
+      };
+    }
+
+    if (contest.clubId !== membership.clubId) {
+      return {
+        kind: "club_mismatch" as const,
+      };
+    }
+
+    if (contest.status !== "active") {
+      return {
+        kind: "contest_inactive" as const,
+      };
+    }
+
+    const design = contest.designs.find((candidate) => candidate.id === body.designId);
+
+    if (!design) {
+      return {
+        kind: "design_not_found" as const,
+      };
+    }
+
+    if (!primaryWallet) {
+      return {
+        kind: "wallet_required" as const,
+      };
+    }
+
+    const lockedSupport = await tx.contestSupport.findFirst({
+      where: {
+        contestId: contest.id,
+        status: "confirmed",
+        userId: user.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (lockedSupport && lockedSupport.designId !== design.id) {
+      return {
+        kind: "design_locked" as const,
+        designId: lockedSupport.designId,
+      };
+    }
+
+    if (balanceTfcRaw < amountRaw) {
+      return {
+        kind: "insufficient_balance" as const,
+      };
+    }
+
+    const intentId = randomUUID();
+    const intentRef = createIntentRef(intentId);
+    const intent = await tx.transactionIntent.create({
+      data: {
+        id: intentId,
+        userId: user.id,
+        walletAddress: primaryWallet.walletAddress,
+        intentType: "contest_support",
+        sourceScreen: "campaign",
+        sourceAction: "confirm_support",
+        targetContract: deployments.clubContest,
+        targetMethod: "supportDesign",
+        status: "intent_created",
+        idempotencyKey: `contest-support:${user.id}:${intentId}`,
+        metadata: {
+          amountRaw: amountRaw.toString(),
+          clubId: membership.clubId.toString(),
+          contestId: contest.id,
+          contestOnchainId: contest.onchainContestId.toString(),
+          designId: design.id,
+          designOnchainId: design.onchainDesignId.toString(),
+          intentRef,
+          sponsorRequired: true,
+          workerChainActions: ["reconcile_contest_support"],
+        } as never,
+      },
+    });
+
+    return {
+      amountRaw: amountRaw.toString(),
+      contest,
+      design,
+      intent,
+      kind: "ok" as const,
+    };
+  });
+
+  if (result.kind === "membership_required") {
+    return reply.code(409).send({
+      error: "Defina seu clube antes de apoiar a campanha.",
+    });
+  }
+
+  if (result.kind === "contest_not_found") {
+    return reply.code(404).send({
+      error: "Campanha nao encontrada.",
+    });
+  }
+
+  if (result.kind === "club_mismatch") {
+    return reply.code(409).send({
+      error: "Esta campanha nao pertence ao clube ativo da sua conta.",
+    });
+  }
+
+  if (result.kind === "contest_inactive") {
+    return reply.code(409).send({
+      error: "Esta campanha nao esta recebendo apoio agora.",
+    });
+  }
+
+  if (result.kind === "design_not_found") {
+    return reply.code(404).send({
+      error: "Arte nao encontrada nesta campanha.",
+    });
+  }
+
+  if (result.kind === "wallet_required") {
+    return reply.code(409).send({
+      error: "Nao encontramos uma wallet pronta para seguir.",
+    });
+  }
+
+  if (result.kind === "design_locked") {
+    return reply.code(409).send({
+      error: "Nesta demo, depois do primeiro apoio voce so pode aumentar a mesma arte.",
+    });
+  }
+
+  if (result.kind === "insufficient_balance") {
+    return reply.code(409).send({
+      error: "Seu saldo atual nao cobre esse apoio.",
+    });
+  }
+
+  return {
+    ok: true,
+    amountTfcRaw: result.amountRaw,
+    contest: {
+      id: result.contest.id,
+      title: result.contest.title,
+    },
+    design: {
+      id: result.design.id,
+      title: result.design.title,
+    },
+    intentId: result.intent.id,
+    transaction: {
+      chainId: MONAD_TESTNET_CHAIN_ID,
+      data: encodeFunctionData({
+        abi: clubContestSupportAbi,
+        functionName: "supportDesign",
+        args: [
+          result.contest.onchainContestId,
+          result.design.onchainDesignId,
+          toOnchainTfcUnits(amountRaw),
+          createIntentRef(result.intent.id),
+        ],
+      }),
+      gasLimit: toHex(SUPPORT_GAS_LIMIT),
+      to: deployments.clubContest,
+      value: "0x0",
+    },
+  };
+});
+
+app.post(
+  "/contests/:contestId/support/:intentId/confirm",
+  async (request, reply) => {
+    const session = await authenticatePrivySession(request, reply);
+
+    if (!session) {
+      return;
+    }
+
+    const params = contestSupportConfirmParamsSchema.parse(request.params);
+    const body = contestSupportConfirmBodySchema.parse(request.body ?? {});
+    const user = await ensureUserForSession(session.user_id);
+    const result = await prisma.$transaction(async (tx) => {
+      const intent = await tx.transactionIntent.findUnique({
+        where: { id: params.intentId },
+      });
+
+      if (
+        !intent ||
+        intent.userId !== user.id ||
+        intent.intentType !== "contest_support"
+      ) {
+        return {
+          kind: "not_found" as const,
+        };
+      }
+
+      const metadata = normalizeJsonObject(intent.metadata);
+
+      if (metadata?.contestId !== params.contestId) {
+        return {
+          kind: "not_found" as const,
+        };
+      }
+
+      await tx.transactionIntent.update({
+        where: { id: intent.id },
+        data: {
+          metadata: mergeJsonObject(intent.metadata, {
+            txHash: body.txHash,
+            txProposedAt: new Date().toISOString(),
+          }),
+          status: intent.status === "completed" ? "completed" : "tx_proposed",
+        },
+      });
+
+      return {
+        intentId: intent.id,
+        kind: "ok" as const,
+        status: intent.status,
+      };
+    });
+
+    if (result.kind === "not_found") {
+      return reply.code(404).send({
+        error: "Intent de apoio nao encontrada.",
+      });
+    }
+
+    const workerResult =
+      result.status === "completed"
+        ? { state: "completed" }
+        : await enqueueWorkerIntent(result.intentId, request.log);
+
+    return {
+      ok: true,
+      processingState: workerResult?.state ?? "queued",
+      ...(await buildAppUserState(user.id)),
+    };
+  },
+);
+
+app.post("/shop/checkout", async (request, reply) => {
+  const session = await authenticatePrivySession(request, reply);
+
+  if (!session) {
+    return;
+  }
+
+  const body = shopCheckoutBodySchema.parse(request.body ?? {});
+  const user = await ensureUserForSession(session.user_id);
+  const result = await prisma.$transaction(async (tx) => {
+    const [membership, primaryWallet, product] = await Promise.all([
+      tx.clubMembership.findUnique({
+        where: { userId: user.id },
+      }),
+      tx.userWallet.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: "asc" },
+      }),
+      tx.shopProduct.findUnique({
+        where: { id: body.productId },
+      }),
+    ]);
+
+    if (!membership) {
+      return {
+        kind: "membership_required" as const,
+      };
+    }
+
+    if (!primaryWallet) {
+      return {
+        kind: "wallet_required" as const,
+      };
+    }
+
+    if (!product || !product.isActive) {
+      return {
+        kind: "product_not_found" as const,
+      };
+    }
+
+    if (product.clubId !== membership.clubId) {
+      return {
+        kind: "club_mismatch" as const,
+      };
+    }
+
+    const balanceTfcRaw = await getUserBalanceRawWithClient(tx, user.id);
+    const priceTfcRaw = BigInt(product.priceTfcRaw.toString());
+
+    if (balanceTfcRaw < priceTfcRaw) {
+      return {
+        kind: "insufficient_balance" as const,
+      };
+    }
+
+    const intentId = randomUUID();
+    const orderId = randomUUID();
+    await tx.transactionIntent.create({
+      data: {
+        id: intentId,
+        userId: user.id,
+        walletAddress: primaryWallet.walletAddress,
+        intentType: "shop_checkout",
+        sourceScreen: "checkout",
+        sourceAction: "confirm_purchase",
+        targetContract: deployments.tfcToken,
+        targetMethod: "burn",
+        status: "intent_created",
+        idempotencyKey: `shop-checkout:${user.id}:${orderId}`,
+        metadata: {
+          clubId: product.clubId.toString(),
+          priceTfcRaw: priceTfcRaw.toString(),
+          productId: product.id,
+          productName: product.name,
+          workerChainActions: ["burn_checkout_tfc"],
+        } as never,
+      },
+    });
+
+    const order = await tx.shopOrder.create({
+      data: {
+        id: orderId,
+        userId: user.id,
+        clubId: product.clubId,
+        productId: product.id,
+        priceTfcRaw: priceTfcRaw.toString(),
+        customerStatus: "processing",
+        internalStatus: "burn_requested",
+        paymentIntentId: intentId,
+        fulfillmentStatus: "awaiting_confirmation",
+      },
+      include: {
+        product: true,
+      },
+    });
+
+    return {
+      kind: "ok" as const,
+      order,
+      intentId,
+    };
+  });
+
+  if (result.kind === "membership_required") {
+    return reply.code(409).send({
+      error: "Defina seu clube antes de concluir uma compra.",
+    });
+  }
+
+  if (result.kind === "wallet_required") {
+    return reply.code(409).send({
+      error: "Nao encontramos uma wallet pronta para seguir.",
+    });
+  }
+
+  if (result.kind === "product_not_found") {
+    return reply.code(404).send({
+      error: "Produto nao encontrado.",
+    });
+  }
+
+  if (result.kind === "club_mismatch") {
+    return reply.code(409).send({
+      error: "Este produto nao pertence ao clube ativo da sua conta.",
+    });
+  }
+
+  if (result.kind === "insufficient_balance") {
+    return reply.code(409).send({
+      error: "Seu saldo atual nao cobre esta compra.",
+    });
+  }
+
+  const workerResult = await enqueueWorkerIntent(result.intentId, request.log);
+
+  return {
+    ok: true,
+    order: {
+      customerStatus: result.order.customerStatus,
+      fulfillmentStatus: result.order.fulfillmentStatus,
+      id: result.order.id,
+      priceTfcRaw: result.order.priceTfcRaw.toString(),
+      productId: result.order.productId,
+      productName: result.order.product.name,
+    },
+    processingState: workerResult?.state ?? "queued",
+    ...(await buildAppUserState(user.id)),
+  };
+});
+
 app.get("/clubs/featured", async () => {
   const clubs = await prisma.club.findMany({
     where: { isFeatured: true, isActive: true },
@@ -523,6 +1017,38 @@ app.get("/clubs/:slug/dashboard", async (request, reply) => {
   }
 
   const contest = club.contests[0] ?? null;
+  const contestSupports = contest
+    ? await prisma.contestSupport.findMany({
+        where: {
+          contestId: contest.id,
+          status: "confirmed",
+        },
+        select: {
+          designId: true,
+          incrementTfcRaw: true,
+          userId: true,
+        },
+      })
+    : [];
+  const contestDesignMetrics = new Map<
+    string,
+    {
+      supporters: Set<string>;
+      totalTfcRaw: bigint;
+    }
+  >();
+
+  for (const support of contestSupports) {
+    const current =
+      contestDesignMetrics.get(support.designId) ??
+      {
+        supporters: new Set<string>(),
+        totalTfcRaw: 0n,
+      };
+    current.supporters.add(support.userId);
+    current.totalTfcRaw += BigInt(support.incrementTfcRaw.toString());
+    contestDesignMetrics.set(support.designId, current);
+  }
 
   return {
     club: {
@@ -549,14 +1075,31 @@ app.get("/clubs/:slug/dashboard", async (request, reply) => {
           startsAt: contest.startsAt,
           endsAt: contest.endsAt,
           treasuryAddress: contest.treasuryAddress,
-          designs: contest.designs.map((design) => ({
-            id: design.id,
-            onchainDesignId: design.onchainDesignId.toString(),
-            title: design.title,
-            creatorLabel: design.creatorLabel,
-            previewImageUrl: design.previewImageUrl,
-            metadataUri: design.metadataUri,
-          })),
+          designs: contest.designs
+            .map((design) => {
+              const metrics = contestDesignMetrics.get(design.id);
+
+              return {
+                id: design.id,
+                onchainDesignId: design.onchainDesignId.toString(),
+                title: design.title,
+                creatorLabel: design.creatorLabel,
+                previewImageUrl: design.previewImageUrl,
+                metadataUri: design.metadataUri,
+                supportersCount: metrics?.supporters.size ?? 0,
+                totalTfcRaw: metrics?.totalTfcRaw.toString() ?? "0",
+              };
+            })
+            .sort((left, right) => {
+              const leftTotal = BigInt(left.totalTfcRaw);
+              const rightTotal = BigInt(right.totalTfcRaw);
+
+              if (leftTotal === rightTotal) {
+                return Number(BigInt(left.onchainDesignId) - BigInt(right.onchainDesignId));
+              }
+
+              return leftTotal > rightTotal ? -1 : 1;
+            }),
         }
       : null,
     shopProducts: club.shopProducts.map((product) => ({
@@ -669,7 +1212,14 @@ async function ensureUserForSession(privyUserId: string) {
 }
 
 async function buildAppUserState(userId: string) {
-  const [membership, wallets, balanceTfcRaw, latestOnboardingIntent, latestTopupOrder] =
+  const [
+    membership,
+    wallets,
+    balanceTfcRaw,
+    latestOnboardingIntent,
+    latestTopupOrder,
+    activityData,
+  ] =
     await Promise.all([
       prisma.clubMembership.findUnique({
         where: { userId },
@@ -691,6 +1241,7 @@ async function buildAppUserState(userId: string) {
         where: { userId },
         orderBy: { createdAt: "desc" },
       }),
+      buildUserActivityData(userId),
     ]);
 
   return {
@@ -718,6 +1269,10 @@ async function buildAppUserState(userId: string) {
           joinedAt: membership.joinedAt,
         }
       : null,
+    activity: activityData.activity,
+    activitySummary: activityData.activitySummary,
+    latestOrder: activityData.latestOrder,
+    latestSupport: activityData.latestSupport,
     wallets: wallets.map((wallet) => ({
       address: wallet.walletAddress,
       isEmbedded: wallet.isEmbedded,
@@ -727,7 +1282,14 @@ async function buildAppUserState(userId: string) {
 }
 
 async function getUserBalanceRaw(userId: string) {
-  const ledgerEntries = await prisma.ledgerEntry.findMany({
+  return getUserBalanceRawWithClient(prisma, userId);
+}
+
+async function getUserBalanceRawWithClient(
+  client: BalanceClient,
+  userId: string,
+) {
+  const ledgerEntries = await client.ledgerEntry.findMany({
     where: {
       userId,
       status: "posted",
@@ -742,6 +1304,233 @@ async function getUserBalanceRaw(userId: string) {
     const amount = BigInt(entry.amountRaw.toString());
     return entry.direction === "credit" ? total + amount : total - amount;
   }, 0n);
+}
+
+async function buildUserActivityData(userId: string) {
+  const [ledgerEntries, latestOrder, latestSupport, latestTopup, currentBalanceTfcRaw] =
+    await Promise.all([
+      prisma.ledgerEntry.findMany({
+        where: {
+          userId,
+          status: "posted",
+        },
+        orderBy: [{ effectiveAt: "desc" }, { createdAt: "desc" }],
+        take: 12,
+      }),
+      prisma.shopOrder.findFirst({
+        where: {
+          customerStatus: "completed",
+          userId,
+        },
+        orderBy: { createdAt: "desc" },
+        include: {
+          product: true,
+        },
+      }),
+      prisma.contestSupport.findFirst({
+        where: {
+          status: "confirmed",
+          userId,
+        },
+        orderBy: { createdAt: "desc" },
+        include: {
+          contest: true,
+          design: true,
+        },
+      }),
+      prisma.topupOrder.findFirst({
+        where: {
+          customerStatus: "completed",
+          userId,
+        },
+        orderBy: [{ approvedAt: "desc" }, { createdAt: "desc" }],
+      }),
+      getUserBalanceRaw(userId),
+    ]);
+
+  const supportIds = ledgerEntries
+    .filter((entry) => entry.sourceType === "contest_support" && entry.sourceId)
+    .map((entry) => entry.sourceId!)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const shopIds = ledgerEntries
+    .filter((entry) => entry.sourceType === "shop_order" && entry.sourceId)
+    .map((entry) => entry.sourceId!)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const topupIds = ledgerEntries
+    .filter((entry) => entry.sourceType === "topup_order" && entry.sourceId)
+    .map((entry) => entry.sourceId!)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const onboardingIntentIds = ledgerEntries
+    .filter(
+      (entry) =>
+        entry.sourceType === "onboarding_activation" &&
+        (entry.sourceId ?? entry.transactionIntentId),
+    )
+    .map((entry) => entry.sourceId ?? entry.transactionIntentId!)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const [supports, orders, topups, onboardingIntents] = await Promise.all([
+    supportIds.length
+      ? prisma.contestSupport.findMany({
+          where: {
+            id: { in: supportIds },
+          },
+          include: {
+            design: true,
+          },
+        })
+      : Promise.resolve([]),
+    shopIds.length
+      ? prisma.shopOrder.findMany({
+          where: {
+            id: { in: shopIds },
+          },
+          include: {
+            product: true,
+          },
+        })
+      : Promise.resolve([]),
+    topupIds.length
+      ? prisma.topupOrder.findMany({
+          where: {
+            id: { in: topupIds },
+          },
+        })
+      : Promise.resolve([]),
+    onboardingIntentIds.length
+      ? prisma.transactionIntent.findMany({
+          where: {
+            id: { in: onboardingIntentIds },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+  const supportById = new Map(supports.map((support) => [support.id, support]));
+  const orderById = new Map(orders.map((order) => [order.id, order]));
+  const topupById = new Map(topups.map((topup) => [topup.id, topup]));
+  const onboardingById = new Map(
+    onboardingIntents.map((intent) => [intent.id, intent]),
+  );
+
+  return {
+    activity: ledgerEntries.map((entry) =>
+      buildActivityItemPayload(entry, {
+        onboardingById,
+        orderById,
+        supportById,
+        topupById,
+      }),
+    ),
+    activitySummary: {
+      currentBalanceTfcRaw: currentBalanceTfcRaw.toString(),
+      lastOrderTfcRaw: latestOrder?.priceTfcRaw.toString() ?? "0",
+      lastSupportTfcRaw: latestSupport?.incrementTfcRaw.toString() ?? "0",
+      lastTopupTfcRaw: latestTopup?.tfcAmountRaw.toString() ?? "0",
+    },
+    latestOrder: latestOrder
+      ? {
+          customerStatus: latestOrder.customerStatus,
+          fulfillmentStatus: latestOrder.fulfillmentStatus,
+          id: latestOrder.id,
+          priceTfcRaw: latestOrder.priceTfcRaw.toString(),
+          productId: latestOrder.productId,
+          productName: latestOrder.product.name,
+        }
+      : null,
+    latestSupport: latestSupport
+      ? {
+          contestId: latestSupport.contestId,
+          contestTitle: latestSupport.contest.title,
+          cumulativeTfcRaw: latestSupport.cumulativeTfcRaw.toString(),
+          designId: latestSupport.designId,
+          designTitle: latestSupport.design.title,
+          incrementTfcRaw: latestSupport.incrementTfcRaw.toString(),
+          status: latestSupport.status,
+        }
+      : null,
+  };
+}
+
+function buildActivityItemPayload(
+  entry: {
+    amountRaw: { toString(): string };
+    createdAt: Date;
+    direction: "credit" | "debit";
+    effectiveAt: Date;
+    reason: string;
+    sourceId: string | null;
+    sourceType: string;
+    transactionIntentId: string | null;
+  },
+  references: {
+    onboardingById: Map<string, { id: string }>;
+    orderById: Map<string, { product: { name: string } }>;
+    supportById: Map<string, { design: { title: string } }>;
+    topupById: Map<string, { tfcAmountRaw: { toString(): string } }>;
+  },
+): ActivityItemPayload {
+  const amountRaw = entry.amountRaw.toString();
+  const timestamp = formatActivityTime(entry.effectiveAt ?? entry.createdAt);
+
+  if (entry.sourceType === "shop_order" && entry.sourceId) {
+    const order = references.orderById.get(entry.sourceId);
+
+    return {
+      amount: formatSignedTfc("debit", amountRaw),
+      detail: order?.product.name ?? "Pedido confirmado",
+      status: "Concluido",
+      time: timestamp,
+      title: "Compra concluida",
+    };
+  }
+
+  if (entry.sourceType === "contest_support" && entry.sourceId) {
+    const support = references.supportById.get(entry.sourceId);
+
+    return {
+      amount: formatSignedTfc("debit", amountRaw),
+      detail: support?.design.title ?? "Apoio em campanha",
+      status: "Confirmado",
+      time: timestamp,
+      title: "Apoio confirmado",
+    };
+  }
+
+  if (entry.sourceType === "topup_order" && entry.sourceId) {
+    const topup = references.topupById.get(entry.sourceId);
+
+    return {
+      amount: formatSignedTfc(
+        "credit",
+        topup?.tfcAmountRaw.toString() ?? amountRaw,
+      ),
+      detail: "PIX confirmado",
+      status: "Saldo liberado",
+      time: timestamp,
+      title: "Credito liberado",
+    };
+  }
+
+  if (
+    entry.sourceType === "onboarding_activation" &&
+    (entry.sourceId ?? entry.transactionIntentId) &&
+    references.onboardingById.has(entry.sourceId ?? entry.transactionIntentId!)
+  ) {
+    return {
+      amount: formatSignedTfc("credit", amountRaw),
+      detail: "ClubPass + saldo inicial",
+      status: "Ativo",
+      time: timestamp,
+      title: "Perfil ativado",
+    };
+  }
+
+  return {
+    amount: formatSignedTfc(entry.direction, amountRaw),
+    detail: "Movimento confirmado na conta",
+    status: entry.reason === "topup_pix_mock" ? "Saldo liberado" : "Confirmado",
+    time: timestamp,
+    title: entry.direction === "credit" ? "Credito confirmado" : "Saida confirmada",
+  };
 }
 
 async function enqueueWorkerIntent(
@@ -819,4 +1608,48 @@ async function syncClubMetricsSupporterCount(
       supportersCount,
     },
   });
+}
+
+function createIntentRef(intentId: string) {
+  return keccak256(toBytes(intentId));
+}
+
+function toOnchainTfcUnits(amountRaw: bigint) {
+  return amountRaw * ONE_TFC_ONCHAIN;
+}
+
+function normalizeJsonObject(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function mergeJsonObject(
+  existing: unknown,
+  additions: Record<string, unknown>,
+) {
+  return {
+    ...(normalizeJsonObject(existing) ?? {}),
+    ...additions,
+  } as never;
+}
+
+function formatSignedTfc(
+  direction: "credit" | "debit",
+  amountRaw: string,
+) {
+  const sign = direction === "credit" ? "+" : "-";
+  return `${sign}${new Intl.NumberFormat("pt-BR").format(BigInt(amountRaw))} TFC`;
+}
+
+function formatActivityTime(value: Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  }).format(value);
 }

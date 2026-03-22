@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { CheckoutExperience } from "@/components/checkout-experience";
 import { appBalance } from "@/lib/data";
+import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub } from "@/lib/club-routing";
 
 export default async function CheckoutPage({
@@ -10,10 +11,18 @@ export default async function CheckoutPage({
 }) {
   const params = await searchParams;
   const activeClub = resolveActiveClub(undefined, params.club);
+  const dashboard = activeClub ? await getClubDashboard(activeClub.slug) : null;
+  const selectedProduct = dashboard
+    ? dashboard.shopProducts.find(
+        (product) => product.id === params.product || product.sku === params.product,
+      ) ??
+      dashboard.shopProducts[0] ??
+      null
+    : undefined;
 
   return (
     <AppShell activeClub={activeClub} balance={appBalance.afterTopup}>
-      <CheckoutExperience productId={params.product} />
+      <CheckoutExperience product={selectedProduct} productId={params.product} />
     </AppShell>
   );
 }

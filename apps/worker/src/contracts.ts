@@ -12,7 +12,13 @@ export const clubPassAbi = parseAbi([
   "function membershipTokenOf(address holder) view returns (uint256)",
 ]);
 
+export const clubContestAbi = parseAbi([
+  "function supportDesign(uint256 contestId, uint256 designId, uint256 amount, bytes32 intentId)",
+  "event SupportAdded(uint256 indexed contestId, uint256 indexed designId, address indexed supporter, uint256 amount, bytes32 intentId)",
+]);
+
 export const tfcTokenAbi = parseAbi([
+  "function burn(address from, uint256 amount)",
   "function mint(address to, uint256 amount)",
 ]);
 

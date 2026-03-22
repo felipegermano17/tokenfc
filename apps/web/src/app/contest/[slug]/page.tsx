@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { CampaignExperience } from "@/components/campaign-experience";
 import { PageIntro, Surface } from "@/components/tokenfc-ui";
 import { appBalance, campaignContext } from "@/lib/data";
+import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub } from "@/lib/club-routing";
 
 export default async function ContestPage({
@@ -20,6 +21,7 @@ export default async function ContestPage({
   }
 
   const club = resolveActiveClub(undefined, query.club);
+  const dashboard = club ? await getClubDashboard(club.slug) : null;
 
   return (
     <AppShell activeClub={club} balance={appBalance.main}>
@@ -30,7 +32,7 @@ export default async function ContestPage({
           copy={campaignContext.rule}
         />
         {club ? (
-          <CampaignExperience club={club} />
+          <CampaignExperience club={club} contest={dashboard?.contest} />
         ) : (
           <Surface className="empty-state">
             <p className="eyebrow">Escolha um clube</p>

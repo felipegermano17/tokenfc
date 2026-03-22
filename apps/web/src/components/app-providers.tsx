@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { monadTestnet } from "viem/chains";
+import type { ActivityItem } from "@/lib/data";
 import { mapPrivyWalletsForSession } from "@/lib/privy";
 
 type AuthRuntimeContextValue = {
@@ -49,9 +50,39 @@ type LatestTopupState = {
   tfcAmountRaw: string;
 } | null;
 
+type LatestSupportState = {
+  contestId: string;
+  contestTitle: string;
+  cumulativeTfcRaw: string;
+  designId: string;
+  designTitle: string;
+  incrementTfcRaw: string;
+  status: string;
+} | null;
+
+type LatestOrderState = {
+  customerStatus: string;
+  fulfillmentStatus: string;
+  id: string;
+  priceTfcRaw: string;
+  productId: string;
+  productName: string;
+} | null;
+
+type ActivitySummaryState = {
+  currentBalanceTfcRaw: string;
+  lastOrderTfcRaw: string;
+  lastSupportTfcRaw: string;
+  lastTopupTfcRaw: string;
+};
+
 export type TokenFcAppState = {
   activation: ActivationState;
+  activity: ActivityItem[];
+  activitySummary: ActivitySummaryState;
   balanceTfcRaw: string;
+  latestOrder: LatestOrderState;
+  latestSupport: LatestSupportState;
   latestTopup: LatestTopupState;
   membership: AppMembershipState;
   wallets: AppWalletState[];
@@ -82,6 +113,45 @@ type TopupApproveResponse = {
   processingState: string;
 } & TokenFcAppState;
 
+type ContestSupportPrepareResponse = {
+  ok: true;
+  amountTfcRaw: string;
+  contest: {
+    id: string;
+    title: string;
+  };
+  design: {
+    id: string;
+    title: string;
+  };
+  intentId: string;
+  transaction: {
+    chainId: number;
+    data: string;
+    gasLimit: string;
+    to: string;
+    value: string;
+  };
+};
+
+type ContestSupportConfirmResponse = {
+  ok: true;
+  processingState: string;
+} & TokenFcAppState;
+
+type ShopCheckoutResponse = {
+  ok: true;
+  order: {
+    customerStatus: string;
+    fulfillmentStatus: string;
+    id: string;
+    priceTfcRaw: string;
+    productId: string;
+    productName: string;
+  };
+  processingState: string;
+} & TokenFcAppState;
+
 type TokenFcSessionContextValue = {
   authenticated: boolean;
   error: string | null;
@@ -89,6 +159,17 @@ type TokenFcSessionContextValue = {
   state: TokenFcAppState | null;
   createPixTopup: (amountTfc: number) => Promise<TopupCreateResponse>;
   approvePixTopup: (orderId: string) => Promise<TopupApproveResponse>;
+  prepareContestSupport: (
+    contestId: string,
+    designId: string,
+    amountTfc: number,
+  ) => Promise<ContestSupportPrepareResponse>;
+  confirmContestSupport: (
+    contestId: string,
+    intentId: string,
+    txHash: string,
+  ) => Promise<ContestSupportConfirmResponse>;
+  checkoutProduct: (productId: string) => Promise<ShopCheckoutResponse>;
   refresh: () => Promise<TokenFcAppState | null>;
 };
 
@@ -105,6 +186,15 @@ const TokenFcSessionContext = createContext<TokenFcSessionContextValue>({
     throw new Error("Sessao Token F.C. indisponivel.");
   },
   approvePixTopup: async () => {
+    throw new Error("Sessao Token F.C. indisponivel.");
+  },
+  prepareContestSupport: async () => {
+    throw new Error("Sessao Token F.C. indisponivel.");
+  },
+  confirmContestSupport: async () => {
+    throw new Error("Sessao Token F.C. indisponivel.");
+  },
+  checkoutProduct: async () => {
     throw new Error("Sessao Token F.C. indisponivel.");
   },
   refresh: async () => null,
@@ -146,6 +236,15 @@ export function AppProviders({
             },
             approvePixTopup: async () => {
               throw new Error("Ative o Privy para usar o saldo real.");
+            },
+            prepareContestSupport: async () => {
+              throw new Error("Ative o Privy para usar a campanha real.");
+            },
+            confirmContestSupport: async () => {
+              throw new Error("Ative o Privy para usar a campanha real.");
+            },
+            checkoutProduct: async () => {
+              throw new Error("Ative o Privy para concluir compras reais.");
             },
             refresh: async () => null,
           }}
@@ -300,6 +399,50 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
     [apiBaseUrl, withAccessToken],
   );
 
+  const prepareContestSupport = useCallback(
+    async (contestId: string, designId: string, amountTfc: number) => {
+      const accessToken = await withAccessToken();
+
+      return (await requestJson(`${apiBaseUrl}/contests/${contestId}/support/prepare`, {
+        accessToken,
+        body: { amountTfc, designId },
+        method: "POST",
+      })) as ContestSupportPrepareResponse;
+    },
+    [apiBaseUrl, withAccessToken],
+  );
+
+  const confirmContestSupport = useCallback(
+    async (contestId: string, intentId: string, txHash: string) => {
+      const accessToken = await withAccessToken();
+      const payload = (await requestJson(
+        `${apiBaseUrl}/contests/${contestId}/support/${intentId}/confirm`,
+        {
+          accessToken,
+          body: { txHash },
+          method: "POST",
+        },
+      )) as ContestSupportConfirmResponse;
+      setState(extractAppState(payload));
+      return payload;
+    },
+    [apiBaseUrl, withAccessToken],
+  );
+
+  const checkoutProduct = useCallback(
+    async (productId: string) => {
+      const accessToken = await withAccessToken();
+      const payload = (await requestJson(`${apiBaseUrl}/shop/checkout`, {
+        accessToken,
+        body: { productId },
+        method: "POST",
+      })) as ShopCheckoutResponse;
+      setState(extractAppState(payload));
+      return payload;
+    },
+    [apiBaseUrl, withAccessToken],
+  );
+
   useEffect(() => {
     if (!ready) {
       return;
@@ -324,6 +467,9 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
         state,
         createPixTopup,
         approvePixTopup,
+        prepareContestSupport,
+        confirmContestSupport,
+        checkoutProduct,
         refresh,
       }}
     >
@@ -334,14 +480,27 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
 
 function extractAppState(payload: {
   activation?: ActivationState;
+  activity?: ActivityItem[];
+  activitySummary?: ActivitySummaryState;
   balanceTfcRaw?: string;
+  latestOrder?: LatestOrderState;
+  latestSupport?: LatestSupportState;
   latestTopup?: LatestTopupState;
   membership?: AppMembershipState;
   wallets?: AppWalletState[];
 }) {
   return {
     activation: payload.activation ?? null,
+    activity: payload.activity ?? [],
+    activitySummary: payload.activitySummary ?? {
+      currentBalanceTfcRaw: payload.balanceTfcRaw ?? "0",
+      lastOrderTfcRaw: "0",
+      lastSupportTfcRaw: "0",
+      lastTopupTfcRaw: "0",
+    },
     balanceTfcRaw: payload.balanceTfcRaw ?? "0",
+    latestOrder: payload.latestOrder ?? null,
+    latestSupport: payload.latestSupport ?? null,
     latestTopup: payload.latestTopup ?? null,
     membership: payload.membership ?? null,
     wallets: payload.wallets ?? [],

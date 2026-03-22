@@ -3,20 +3,21 @@
 import Link from "next/link";
 import { useEffect, useId, useRef } from "react";
 import { useRouter } from "next/navigation";
+import type {
+  ClubDashboardContest,
+  ClubDashboardShopProduct,
+} from "@/lib/api";
 import type { Club, Product } from "@/lib/data";
 import {
-  activityFeed,
   campaignContext,
   defaultProduct,
-  formatTfc,
 } from "@/lib/data";
+import { ActivityExperience } from "@/components/activity-experience";
 import { CampaignExperience } from "@/components/campaign-experience";
 import { CheckoutExperience } from "@/components/checkout-experience";
 import { CreditFlowPanel } from "@/components/credit-flow-panel";
 import {
-  ActivityLedgerTimeline,
   ProductSpotlightCard,
-  Surface,
 } from "@/components/tokenfc-ui";
 import { withClubModal } from "@/lib/club-routing";
 import { RankingOverview } from "@/components/ranking-overview";
@@ -65,8 +66,30 @@ const modalCopy: Record<
   },
 };
 
-function ShopModalContent({ club }: { club: Club }) {
-  const spotlightProduct = defaultProduct;
+function ShopModalContent({
+  club,
+  products,
+}: {
+  club: Club;
+  products?: ClubDashboardShopProduct[];
+}) {
+  if (products && products.length === 0) {
+    return (
+      <div className="modal-stack">
+        <p>Nenhum produto esta liberado neste clube agora.</p>
+      </div>
+    );
+  }
+
+  const spotlightProduct = products?.[0]
+    ? {
+        emphasis: "Destaque",
+        id: products[0].id,
+        name: products[0].name,
+        note: "Produto ativo conectado ao catalogo seedado da demo.",
+        price: Number(products[0].priceTfcRaw),
+      }
+    : defaultProduct;
 
   return (
     <div className="modal-stack">
@@ -79,55 +102,28 @@ function ShopModalContent({ club }: { club: Club }) {
   );
 }
 
-function ActivityModalContent() {
-  return (
-    <div className="modal-stack">
-      <Surface className="activity-summary">
-        <div className="section-heading">
-          <p>Resumo do ciclo</p>
-          <span>O que mais pesa agora na sua conta</span>
-        </div>
-        <div className="credit-flow-ledger">
-          <div>
-            <span>Saldo atual</span>
-            <strong>{formatTfc(22)}</strong>
-          </div>
-          <div>
-            <span>Ultimo apoio</span>
-            <strong>{formatTfc(10)}</strong>
-          </div>
-          <div>
-            <span>Ultima compra</span>
-            <strong>{formatTfc(40)}</strong>
-          </div>
-        </div>
-      </Surface>
-
-      <Surface className="activity-page-surface">
-        <div className="section-heading">
-          <p>Linha do tempo</p>
-          <span>Ultimos movimentos confirmados</span>
-        </div>
-        <ActivityLedgerTimeline items={activityFeed} />
-      </Surface>
-    </div>
-  );
-}
-
 export function DashboardModal({
   club,
   modal,
   product,
+  contest,
+  selectedProduct,
+  shopProducts,
 }: {
   club: Club;
   modal: DashboardModalKey;
   product: Product;
+  contest?: ClubDashboardContest;
+  selectedProduct?: ClubDashboardShopProduct | null;
+  shopProducts?: ClubDashboardShopProduct[];
 }) {
   const router = useRouter();
   const content = modalCopy[modal];
   const titleId = useId();
   const descriptionId = useId();
   const shellRef = useRef<HTMLDivElement>(null);
+  const checkoutProductId = shopProducts?.[0]?.id ?? defaultProduct.id;
+  const allowCheckoutShortcut = shopProducts ? shopProducts.length > 0 : true;
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -201,11 +197,15 @@ export function DashboardModal({
         </div>
 
         <div className="dashboard-modal-body">
-          {modal === "campaign" ? <CampaignExperience club={club} compact /> : null}
+          {modal === "campaign" ? (
+            <CampaignExperience club={club} compact contest={contest} />
+          ) : null}
           {modal === "topup" ? <CreditFlowPanel /> : null}
-          {modal === "shop" ? <ShopModalContent club={club} /> : null}
-          {modal === "checkout" ? <CheckoutExperience productId={product.id} /> : null}
-          {modal === "activity" ? <ActivityModalContent /> : null}
+          {modal === "shop" ? <ShopModalContent club={club} products={shopProducts} /> : null}
+          {modal === "checkout" ? (
+            <CheckoutExperience product={selectedProduct} productId={product.id} />
+          ) : null}
+          {modal === "activity" ? <ActivityExperience /> : null}
           {modal === "ranking" ? <RankingOverview /> : null}
         </div>
 
@@ -213,10 +213,10 @@ export function DashboardModal({
           <Link className="button button-ghost" href={withClubModal(club.slug)}>
             Voltar ao painel
           </Link>
-          {modal === "shop" ? (
+          {modal === "shop" && allowCheckoutShortcut ? (
             <Link
               className="button button-primary"
-              href={withClubModal(club.slug, "checkout", { product: defaultProduct.id })}
+              href={withClubModal(club.slug, "checkout", { product: checkoutProductId })}
             >
               Ir para checkout
             </Link>

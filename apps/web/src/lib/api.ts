@@ -1,3 +1,33 @@
+export type ClubDashboardContestDesign = {
+  id: string;
+  onchainDesignId: string;
+  title: string;
+  creatorLabel: string;
+  previewImageUrl: string;
+  metadataUri: string | null;
+  supportersCount: number;
+  totalTfcRaw: string;
+};
+
+export type ClubDashboardContest = {
+  id: string;
+  onchainContestId: string;
+  title: string;
+  status: string;
+  startsAt: string;
+  endsAt: string;
+  treasuryAddress: string;
+  designs: ClubDashboardContestDesign[];
+} | null;
+
+export type ClubDashboardShopProduct = {
+  id: string;
+  sku: string;
+  name: string;
+  imageUrl: string;
+  priceTfcRaw: string;
+};
+
 export type ClubDashboardResponse = {
   club: {
     id: string;
@@ -14,30 +44,8 @@ export type ClubDashboardResponse = {
     supportVolumeRaw: string;
     shopVolumeRaw: string;
   };
-  contest: {
-    id: string;
-    onchainContestId: string;
-    title: string;
-    status: string;
-    startsAt: string;
-    endsAt: string;
-    treasuryAddress: string;
-    designs: Array<{
-      id: string;
-      onchainDesignId: string;
-      title: string;
-      creatorLabel: string;
-      previewImageUrl: string;
-      metadataUri: string | null;
-    }>;
-  } | null;
-  shopProducts: Array<{
-    id: string;
-    sku: string;
-    name: string;
-    imageUrl: string;
-    priceTfcRaw: string;
-  }>;
+  contest: ClubDashboardContest;
+  shopProducts: ClubDashboardShopProduct[];
 };
 
 const apiBaseUrl =

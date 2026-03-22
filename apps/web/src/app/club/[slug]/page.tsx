@@ -52,34 +52,29 @@ export default async function ClubPage({
     notFound();
   }
 
-  const featuredProduct = dashboard?.shopProducts[0]
+  const featuredShopProduct = dashboard?.shopProducts[0] ?? null;
+  const selectedShopProduct =
+    dashboard?.shopProducts.find(
+      (product) => product.id === query.product || product.sku === query.product,
+    ) ?? featuredShopProduct;
+  const featuredProduct = featuredShopProduct
     ? {
         emphasis: "Destaque",
-        id: dashboard.shopProducts[0].id,
-        name: dashboard.shopProducts[0].name,
+        id: featuredShopProduct.id,
+        name: featuredShopProduct.name,
         note: "Produto ativo conectado ao catalogo seedado da demo.",
-        price: Number(dashboard.shopProducts[0].priceTfcRaw),
+        price: Number(featuredShopProduct.priceTfcRaw),
       }
     : defaultProduct;
   const activeProduct =
     getProductById(query.product ?? "") ??
-    (dashboard?.shopProducts.find(
-      (product) => product.id === query.product || product.sku === query.product,
-    )
+    (selectedShopProduct
       ? {
           emphasis: "Destaque",
-          id: dashboard.shopProducts.find(
-            (product) => product.id === query.product || product.sku === query.product,
-          )!.id,
-          name: dashboard.shopProducts.find(
-            (product) => product.id === query.product || product.sku === query.product,
-          )!.name,
+          id: selectedShopProduct.id,
+          name: selectedShopProduct.name,
           note: "Produto ativo conectado ao catalogo seedado da demo.",
-          price: Number(
-            dashboard.shopProducts.find(
-              (product) => product.id === query.product || product.sku === query.product,
-            )!.priceTfcRaw,
-          ),
+          price: Number(selectedShopProduct.priceTfcRaw),
         }
       : featuredProduct);
   const leaderLabel = dashboard?.contest?.designs[0]?.title ?? campaignContext.currentLeader;
@@ -149,7 +144,16 @@ export default async function ClubPage({
         />
       </div>
 
-      {activeModal ? <DashboardModal club={club} modal={activeModal} product={activeProduct} /> : null}
+      {activeModal ? (
+        <DashboardModal
+          club={club}
+          contest={dashboard?.contest}
+          modal={activeModal}
+          product={activeProduct}
+          selectedProduct={selectedShopProduct}
+          shopProducts={dashboard?.shopProducts}
+        />
+      ) : null}
     </AppShell>
   );
 }
