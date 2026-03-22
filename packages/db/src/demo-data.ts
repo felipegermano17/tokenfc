@@ -1,0 +1,118 @@
+const assetBaseUrl = "https://storage.googleapis.com/zap-advogado-tokenfc-blitz-assets";
+const assetBasePath = "clubs";
+
+export const featuredClubs = [
+  {
+    name: "Corinthians",
+    slug: "corinthians",
+    shortName: "Timao",
+    normalizedName: "corinthians",
+    badgeImageUrl: `${assetBaseUrl}/${assetBasePath}/corinthians/badge.png`,
+    mockJerseyImageUrl: `${assetBaseUrl}/${assetBasePath}/corinthians/jersey.png`,
+    badgeStoragePath: `${assetBasePath}/corinthians/badge.png`,
+    mockJerseyStoragePath: `${assetBasePath}/corinthians/jersey.png`,
+    assetSource: "mock-pack",
+    licenseNote: "Uso para demo interna do hackathon Token F.C.",
+    isFeatured: true,
+    aliases: ["corinthians", "timao", "sccp", "corinthians paulista"],
+  },
+  {
+    name: "Flamengo",
+    slug: "flamengo",
+    shortName: "Fla",
+    normalizedName: "flamengo",
+    badgeImageUrl: `${assetBaseUrl}/${assetBasePath}/flamengo/badge.png`,
+    mockJerseyImageUrl: `${assetBaseUrl}/${assetBasePath}/flamengo/jersey.png`,
+    badgeStoragePath: `${assetBasePath}/flamengo/badge.png`,
+    mockJerseyStoragePath: `${assetBasePath}/flamengo/jersey.png`,
+    assetSource: "mock-pack",
+    licenseNote: "Uso para demo interna do hackathon Token F.C.",
+    isFeatured: true,
+    aliases: ["flamengo", "fla", "mengao", "crf"],
+  },
+  {
+    name: "Palmeiras",
+    slug: "palmeiras",
+    shortName: "Verdao",
+    normalizedName: "palmeiras",
+    badgeImageUrl: `${assetBaseUrl}/${assetBasePath}/palmeiras/badge.png`,
+    mockJerseyImageUrl: `${assetBaseUrl}/${assetBasePath}/palmeiras/jersey.png`,
+    badgeStoragePath: `${assetBasePath}/palmeiras/badge.png`,
+    mockJerseyStoragePath: `${assetBasePath}/palmeiras/jersey.png`,
+    assetSource: "mock-pack",
+    licenseNote: "Uso para demo interna do hackathon Token F.C.",
+    isFeatured: true,
+    aliases: ["palmeiras", "verdao", "sep"],
+  },
+  {
+    name: "Sao Paulo",
+    slug: "sao-paulo",
+    shortName: "Tricolor",
+    normalizedName: "sao paulo",
+    badgeImageUrl: `${assetBaseUrl}/${assetBasePath}/sao-paulo/badge.png`,
+    mockJerseyImageUrl: `${assetBaseUrl}/${assetBasePath}/sao-paulo/jersey.png`,
+    badgeStoragePath: `${assetBasePath}/sao-paulo/badge.png`,
+    mockJerseyStoragePath: `${assetBasePath}/sao-paulo/jersey.png`,
+    assetSource: "mock-pack",
+    licenseNote: "Uso para demo interna do hackathon Token F.C.",
+    isFeatured: true,
+    aliases: ["sao paulo", "sao-paulo", "tricolor", "spfc"],
+  },
+] as const;
+
+export const demoContest = {
+  clubSlug: "corinthians",
+  onchainContestId: 1n,
+  title: "Escolha da proxima camisa da torcida",
+  status: "active",
+  treasuryAddress: "0x000000000000000000000000000000000000dEaD",
+  startsAt: new Date("2026-03-20T12:00:00.000Z"),
+  endsAt: new Date("2026-04-05T12:00:00.000Z"),
+  designs: [
+    {
+      onchainDesignId: 1n,
+      title: "Arte #01",
+      creatorLabel: "@torcedor01",
+      previewImageUrl: `${assetBaseUrl}/contests/camisa-2026/arte-01.png`,
+      metadataUri: "ipfs://tokenfc/camisa-2026/arte-01",
+    },
+    {
+      onchainDesignId: 2n,
+      title: "Arte #02",
+      creatorLabel: "@torcedor77",
+      previewImageUrl: `${assetBaseUrl}/contests/camisa-2026/arte-02.png`,
+      metadataUri: "ipfs://tokenfc/camisa-2026/arte-02",
+    },
+    {
+      onchainDesignId: 3n,
+      title: "Arte #03",
+      creatorLabel: "@arquivo1910",
+      previewImageUrl: `${assetBaseUrl}/contests/camisa-2026/arte-03.png`,
+      metadataUri: "ipfs://tokenfc/camisa-2026/arte-03",
+    },
+  ],
+} as const;
+
+export const demoProducts = [
+  {
+    clubSlug: "corinthians",
+    name: "Camisa comemorativa vencedora",
+    sku: "COR-CAMISA-2026",
+    priceTfc: 40n,
+    imageUrl: `${assetBaseUrl}/${assetBasePath}/corinthians/shop/camisa-comemorativa.png`,
+  },
+  {
+    clubSlug: "corinthians",
+    name: "Patch da campanha 2026",
+    sku: "COR-PATCH-2026",
+    priceTfc: 15n,
+    imageUrl: `${assetBaseUrl}/${assetBasePath}/corinthians/shop/patch-campanha.png`,
+  },
+  {
+    clubSlug: "corinthians",
+    name: "Faixa da torcida",
+    sku: "COR-FAIXA-2026",
+    priceTfc: 25n,
+    imageUrl: `${assetBaseUrl}/${assetBasePath}/corinthians/shop/faixa-torcida.png`,
+  },
+] as const;

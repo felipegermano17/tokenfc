@@ -1,0 +1,15 @@
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+dist/
+coverage/
+out/
+.env
+.env.*
+*.log
+apps/web/.next/
+apps/web/out/
+packages/contracts/cache/
+packages/contracts/out/
+packages/contracts/broadcast/

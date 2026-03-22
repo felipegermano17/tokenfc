@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum LedgerDirection {
+  credit
+  debit
+}
+
+enum LedgerStatus {
+  pending
+  posted
+  reversed
+  failed
+}
+
+enum IntentStatus {
+  intent_created
+  tx_requested
+  tx_proposed
+  tx_verified
+  ledger_posted
+  completed
+  failed
+}
+
+model User {
+  id          String           @id @default(uuid()) @db.Uuid
+  privyUserId String           @unique @map("privy_user_id")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  wallets     UserWallet[]
+  membership  ClubMembership?
+  topups      TopupOrder[]
+  shopOrders  ShopOrder[]
+  supports    ContestSupport[]
+  intents     TransactionIntent[]
+  ledger      LedgerEntry[]
+
+  @@map("users")
+}
+
+model UserWallet {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  walletAddress String @unique @map("wallet_address")
+  provider   String   @default("privy")
+  isEmbedded Boolean  @default(true) @map("is_embedded")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_wallets")
+}
+
+model Club {
+  id               BigInt            @id @default(autoincrement())
+  name             String            @unique
+  slug             String            @unique
+  shortName        String            @map("short_name")
+  normalizedName   String            @map("normalized_name")
+  badgeImageUrl    String            @map("badge_image_url")
+  mockJerseyImageUrl String          @map("mock_jersey_image_url")
+  badgeStoragePath String            @map("badge_storage_path")
+  mockJerseyStoragePath String       @map("mock_jersey_storage_path")
+  assetSource      String            @map("asset_source")
+  licenseNote      String            @map("license_note")
+  isFeatured       Boolean           @default(false) @map("is_featured")
+  isActive         Boolean           @default(true) @map("is_active")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  aliases          ClubSearchAlias[]
+  memberships      ClubMembership[]
+  contests         Contest[]
+  contestSupports  ContestSupport[]
+  shopProducts     ShopProduct[]
+  shopOrders       ShopOrder[]
+  ledgerEntries    LedgerEntry[]
+  metrics          ClubMetrics?
+
+  @@map("clubs")
+}
+
+model ClubSearchAlias {
+  id              BigInt @id @default(autoincrement())
+  clubId          BigInt @map("club_id")
+  alias           String
+  normalizedAlias String @map("normalized_alias")
+  club            Club   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, normalizedAlias])
+  @@map("club_search_aliases")
+}
+
+model ClubMembership {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid
+  clubId          BigInt    @map("club_id")
+  clubPassTokenId Decimal?  @map("club_pass_token_id") @db.Decimal(78, 0)
+  joinedAt        DateTime  @default(now()) @map("joined_at") @db.Timestamptz(6)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  club            Club      @relation(fields: [clubId], references: [id])
+
+  @@map("club_memberships")
+}
+
+model ChainTransaction {
+  id          String              @id @default(uuid()) @db.Uuid
+  txHash      String              @unique @map("tx_hash")
+  network     String
+  stage       String
+  fromAddress String?             @map("from_address")
+  toContract  String?             @map("to_contract")
+  method      String?
+  status      String
+  blockNumber BigInt?             @map("block_number")
+  proposedAt  DateTime?           @map("proposed_at") @db.Timestamptz(6)
+  verifiedAt  DateTime?           @map("verified_at") @db.Timestamptz(6)
+  rawReceipt  Json?               @map("raw_receipt")
+  intents     TransactionIntent[]
+  supports    ContestSupport[]
+  ledger      LedgerEntry[]
+
+  @@map("chain_transactions")
+}
+
+model TransactionIntent {
+  id                 String            @id @default(uuid()) @db.Uuid
+  userId             String?           @map("user_id") @db.Uuid
+  walletAddress      String?           @map("wallet_address")
+  intentType         String            @map("intent_type")
+  sourceScreen       String            @map("source_screen")
+  sourceAction       String            @map("source_action")
+  targetContract     String?           @map("target_contract")
+  targetMethod       String?           @map("target_method")
+  chainTransactionId String?           @map("chain_transaction_id") @db.Uuid
+  status             IntentStatus      @default(intent_created)
+  idempotencyKey     String            @unique @map("idempotency_key")
+  metadata           Json              @default("{}")
+  requestedAt        DateTime          @default(now()) @map("requested_at") @db.Timestamptz(6)
+  finalizedAt        DateTime?         @map("finalized_at") @db.Timestamptz(6)
+  user               User?             @relation(fields: [userId], references: [id])
+  chainTransaction   ChainTransaction? @relation(fields: [chainTransactionId], references: [id])
+  supports           ContestSupport[]
+  ledger             LedgerEntry[]
+  topups             TopupOrder[]
+  shopOrders         ShopOrder[]
+
+  @@map("transaction_intents")
+}
+
+model TopupOrder {
+  id              String             @id @default(uuid()) @db.Uuid
+  userId          String             @map("user_id") @db.Uuid
+  brlAmount       Decimal            @map("brl_amount") @db.Decimal(12, 2)
+  tfcAmountRaw    Decimal            @map("tfc_amount_raw") @db.Decimal(78, 0)
+  pixCode         String?            @map("pix_code")
+  pixQrPayload    String?            @map("pix_qr_payload")
+  customerStatus  String             @map("customer_status")
+  internalStatus  String             @map("internal_status")
+  idempotencyKey  String             @unique @map("idempotency_key")
+  approvedAt      DateTime?          @map("approved_at") @db.Timestamptz(6)
+  approvedBy      String?            @map("approved_by")
+  mintIntentId    String?            @map("mint_intent_id") @db.Uuid
+  expiresAt       DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  user            User               @relation(fields: [userId], references: [id])
+  mintIntent      TransactionIntent? @relation(fields: [mintIntentId], references: [id])
+
+  @@map("topup_orders")
+}
+
+model Contest {
+  id              String          @id @default(uuid()) @db.Uuid
+  clubId          BigInt          @map("club_id")
+  onchainContestId BigInt         @unique @map("onchain_contest_id")
+  title           String
+  startsAt        DateTime        @map("starts_at") @db.Timestamptz(6)
+  endsAt          DateTime        @map("ends_at") @db.Timestamptz(6)
+  status          String
+  treasuryAddress String          @map("treasury_address")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  club            Club            @relation(fields: [clubId], references: [id])
+  designs         ContestDesign[]
+  supports        ContestSupport[]
+
+  @@map("contests")
+}
+
+model ContestDesign {
+  id             String           @id @default(uuid()) @db.Uuid
+  contestId      String           @map("contest_id") @db.Uuid
+  onchainDesignId BigInt          @map("onchain_design_id")
+  title          String
+  creatorLabel   String           @map("creator_label")
+  previewImageUrl String          @map("preview_image_url")
+  metadataUri    String?          @map("metadata_uri")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  contest        Contest          @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  supports       ContestSupport[]
+
+  @@unique([contestId, onchainDesignId])
+  @@map("contest_designs")
+}
+
+model ContestSupport {
+  id                  String              @id @default(uuid()) @db.Uuid
+  userId              String              @map("user_id") @db.Uuid
+  contestId           String              @map("contest_id") @db.Uuid
+  designId            String              @map("design_id") @db.Uuid
+  clubId              BigInt              @map("club_id")
+  incrementTfcRaw     Decimal             @map("increment_tfc_raw") @db.Decimal(78, 0)
+  cumulativeTfcRaw    Decimal             @map("cumulative_tfc_raw") @db.Decimal(78, 0)
+  transactionIntentId String?             @map("transaction_intent_id") @db.Uuid
+  chainTransactionId  String?             @map("chain_transaction_id") @db.Uuid
+  status              String
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                User                @relation(fields: [userId], references: [id])
+  contest             Contest             @relation(fields: [contestId], references: [id])
+  design              ContestDesign       @relation(fields: [designId], references: [id])
+  club                Club                @relation(fields: [clubId], references: [id])
+  transactionIntent   TransactionIntent?  @relation(fields: [transactionIntentId], references: [id])
+  chainTransaction    ChainTransaction?   @relation(fields: [chainTransactionId], references: [id])
+
+  @@map("contest_supports")
+}
+
+model ShopProduct {
+  id          String    @id @default(uuid()) @db.Uuid
+  clubId      BigInt    @map("club_id")
+  name        String
+  sku         String    @unique
+  priceTfcRaw Decimal   @map("price_tfc_raw") @db.Decimal(78, 0)
+  imageUrl    String    @map("image_url")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  club        Club      @relation(fields: [clubId], references: [id])
+  orders      ShopOrder[]
+
+  @@map("shop_products")
+}
+
+model ShopOrder {
+  id                String             @id @default(uuid()) @db.Uuid
+  userId            String             @map("user_id") @db.Uuid
+  clubId            BigInt             @map("club_id")
+  productId         String             @map("product_id") @db.Uuid
+  priceTfcRaw       Decimal            @map("price_tfc_raw") @db.Decimal(78, 0)
+  customerStatus    String             @map("customer_status")
+  internalStatus    String             @map("internal_status")
+  paymentIntentId   String?            @map("payment_intent_id") @db.Uuid
+  fulfillmentStatus String             @map("fulfillment_status")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  user              User               @relation(fields: [userId], references: [id])
+  club              Club               @relation(fields: [clubId], references: [id])
+  product           ShopProduct        @relation(fields: [productId], references: [id])
+  paymentIntent     TransactionIntent? @relation(fields: [paymentIntentId], references: [id])
+
+  @@map("shop_orders")
+}
+
+model LedgerEntry {
+  id                  String             @id @default(uuid()) @db.Uuid
+  userId              String?            @map("user_id") @db.Uuid
+  clubId              BigInt?            @map("club_id")
+  asset               String             @default("TFC")
+  direction           LedgerDirection
+  amountRaw           Decimal            @map("amount_raw") @db.Decimal(78, 0)
+  reason              String
+  sourceType          String             @map("source_type")
+  sourceId            String?            @map("source_id") @db.Uuid
+  transactionIntentId String?            @map("transaction_intent_id") @db.Uuid
+  chainTransactionId  String?            @map("chain_transaction_id") @db.Uuid
+  idempotencyKey      String             @unique @map("idempotency_key")
+  status              LedgerStatus
+  effectiveAt         DateTime           @map("effective_at") @db.Timestamptz(6)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                User?              @relation(fields: [userId], references: [id])
+  club                Club?              @relation(fields: [clubId], references: [id])
+  transactionIntent   TransactionIntent? @relation(fields: [transactionIntentId], references: [id])
+  chainTransaction    ChainTransaction?  @relation(fields: [chainTransactionId], references: [id])
+
+  @@map("ledger_entries")
+}
+
+model ClubMetrics {
+  clubId             BigInt   @id @map("club_id")
+  supportersCount    Int      @default(0) @map("supporters_count")
+  tfcTopupVolumeRaw  Decimal  @default(0) @map("tfc_topup_volume_raw") @db.Decimal(78, 0)
+  tfcSupportVolumeRaw Decimal @default(0) @map("tfc_support_volume_raw") @db.Decimal(78, 0)
+  tfcShopVolumeRaw   Decimal  @default(0) @map("tfc_shop_volume_raw") @db.Decimal(78, 0)
+  tfcTotalPowerRaw   Decimal  @default(0) @map("tfc_total_power_raw") @db.Decimal(78, 0)
+  updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  club               Club     @relation(fields: [clubId], references: [id])
+
+  @@map("club_metrics")
+}
