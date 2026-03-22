@@ -50,7 +50,7 @@ export function CampaignExperience({
   }
 
   if (contest === null) {
-    return <EmptyCampaignExperience club={club} compact={compact} />;
+    return <LocalCampaignExperience club={club} compact={compact} />;
   }
 
   return <LiveCampaignExperience club={club} compact={compact} contest={contest} />;
