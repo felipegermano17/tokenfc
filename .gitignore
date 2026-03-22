@@ -13,3 +13,19 @@ apps/web/out/
 packages/contracts/cache/
 packages/contracts/out/
 packages/contracts/broadcast/
+
+# Local/private docs that should not live in the public repo
+/CODEX_EXECUTOR_PLAYBOOK.md
+/assets_and_demo_checklist.md
+/environment_checklist.md
+/hackathon_runbook.md
+/implementation_sequence.md
+/local_preflight_status.md
+/testnet infos monad hack.md
+/token_fc_mvp_documento_atualizado.md
+/ops/gcp/README.md
+/ops/gcp/play_mode.md
+/ops/gcp/provisioned_state.md
+/ops/gcp/resource_isolation.md
+/ops/gcp/resource_plan.md
+/ops/gcp/wallet_inventory.md
