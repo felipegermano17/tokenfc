@@ -6,11 +6,6 @@ Ultima atualizacao:
 
 - 2026-03-22 17:25 BRT
 
-Importante:
-
-- nao salvar private keys neste arquivo
-- manter aqui apenas enderecos, ids, nomes de secrets, hashes de deploy e referencias operacionais
-
 ## Rede
 
 - chain: `Monad Testnet`
