@@ -18,7 +18,7 @@ import {
 } from "react";
 import { monadTestnet } from "viem/chains";
 import type { ActivityItem } from "@/lib/data";
-import { mapPrivyWalletsForSession } from "@/lib/privy";
+import { mapPrivyWalletsForSession, tokenFcLoginMethods } from "@/lib/privy";
 
 type AuthRuntimeContextValue = {
   apiBaseUrl: string;
@@ -262,7 +262,7 @@ export function AppProviders({
         config={{
           defaultChain: monadTestnet,
           supportedChains: [monadTestnet],
-          loginMethods: ["google", "apple", "email", "passkey"],
+          loginMethods: [...tokenFcLoginMethods],
           embeddedWallets: {
             // MVP: usamos a embedded wallet padrao da Privy pela velocidade de demo.
             // Futuramente podemos migrar para um modelo mais restrito se a portabilidade deixar de ser desejada.

@@ -20,7 +20,7 @@ export default async function HomePage({
             <LinkButton className="button-compact" href="/?sheet=ranking" variant="ghost">
               Ver ranking
             </LinkButton>
-            <LinkButton className="button-compact" href="/onboarding?auth=google" variant="secondary">
+            <LinkButton className="button-compact" href="/onboarding" variant="secondary">
               Entrar
             </LinkButton>
           </nav>
@@ -43,7 +43,7 @@ export default async function HomePage({
               </span>
             </p>
             <div className="hero-actions hero-actions-home">
-              <LinkButton className="button-compact hero-entry-button" href="/onboarding?auth=google">
+              <LinkButton className="button-compact hero-entry-button" href="/onboarding">
                 Entrar no ecossistema
               </LinkButton>
             </div>

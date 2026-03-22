@@ -1,6 +1,6 @@
 import type { ConnectedWallet, User } from "@privy-io/react-auth";
 
-export const tokenFcLoginMethods = ["google", "apple", "email", "passkey"] as const;
+export const tokenFcLoginMethods = ["email"] as const;
 
 export function mapPrivyWalletsForSession(wallets: ConnectedWallet[]) {
   const byAddress = new Map<
