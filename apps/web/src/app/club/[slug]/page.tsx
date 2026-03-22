@@ -18,8 +18,11 @@ import {
   formatTfc,
   getProductById,
 } from "@/lib/data";
+import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub, withClubModal } from "@/lib/club-routing";
 import { ClubHero } from "@/components/tokenfc-ui";
+
+export const dynamic = "force-dynamic";
 
 const allowedModals: DashboardModalKey[] = [
   "campaign",
@@ -40,14 +43,65 @@ export default async function ClubPage({
   const { slug } = await params;
   const query = await searchParams;
   const club = resolveActiveClub(slug);
+  const dashboard = await getClubDashboard(slug);
   const activeModal = allowedModals.includes(query.modal as DashboardModalKey)
     ? (query.modal as DashboardModalKey)
     : null;
-  const activeProduct = getProductById(query.product ?? "") ?? defaultProduct;
 
   if (!club) {
     notFound();
   }
+
+  const featuredProduct = dashboard?.shopProducts[0]
+    ? {
+        emphasis: "Destaque",
+        id: dashboard.shopProducts[0].id,
+        name: dashboard.shopProducts[0].name,
+        note: "Produto ativo conectado ao catalogo seedado da demo.",
+        price: Number(dashboard.shopProducts[0].priceTfcRaw),
+      }
+    : defaultProduct;
+  const activeProduct =
+    getProductById(query.product ?? "") ??
+    (dashboard?.shopProducts.find(
+      (product) => product.id === query.product || product.sku === query.product,
+    )
+      ? {
+          emphasis: "Destaque",
+          id: dashboard.shopProducts.find(
+            (product) => product.id === query.product || product.sku === query.product,
+          )!.id,
+          name: dashboard.shopProducts.find(
+            (product) => product.id === query.product || product.sku === query.product,
+          )!.name,
+          note: "Produto ativo conectado ao catalogo seedado da demo.",
+          price: Number(
+            dashboard.shopProducts.find(
+              (product) => product.id === query.product || product.sku === query.product,
+            )!.priceTfcRaw,
+          ),
+        }
+      : featuredProduct);
+  const leaderLabel = dashboard?.contest?.designs[0]?.title ?? campaignContext.currentLeader;
+  const heroTitle = dashboard?.contest?.title ?? campaignContext.heroTitle;
+  const heroCopy =
+    dashboard?.contest
+      ? "A torcida acompanha a disputa da camisa com dados reais do backend sem sair do painel do clube."
+      : campaignContext.heroSupport;
+  const heroContext = dashboard
+    ? [
+        { label: "Arte lider", value: leaderLabel },
+        { label: "Produtos ativos", value: formatNumber(dashboard.shopProducts.length) },
+        {
+          label: "Torcida no clube",
+          value: formatNumber(dashboard.metrics.supportersCount),
+        },
+      ]
+    : [
+        { label: "Arte lider", value: campaignContext.currentLeader },
+        { label: "Total comprometido", value: formatTfc(defaultContestArt.totalTfc) },
+        { label: "Apoiadores", value: formatNumber(defaultContestArt.supporters) },
+      ];
 
   return (
     <AppShell
@@ -63,18 +117,21 @@ export default async function ClubPage({
         <ClubHero
           balance={appBalance.main}
           club={club}
-          context={[
-            { label: "Arte lider", value: campaignContext.currentLeader },
-            { label: "Total comprometido", value: formatTfc(defaultContestArt.totalTfc) },
-            { label: "Apoiadores", value: formatNumber(defaultContestArt.supporters) },
-          ]}
-          copy={campaignContext.heroSupport}
+          context={heroContext}
+          copy={heroCopy}
           ctaHref={withClubModal(club.slug, "campaign")}
           ctaLabel="Abrir campanha"
-          title={campaignContext.heroTitle}
+          title={heroTitle}
         />
 
-        <ClubSignalBand balance={appBalance.main} club={club} />
+        <ClubSignalBand
+          balance={appBalance.main}
+          club={club}
+          supportersCount={dashboard?.metrics.supportersCount}
+          totalPower={
+            dashboard?.metrics ? Number(dashboard.metrics.totalPowerRaw) : undefined
+          }
+        />
 
         <ClubActionDeck
           balance={appBalance.main}
@@ -86,8 +143,8 @@ export default async function ClubPage({
             shop: withClubModal(club.slug, "shop"),
             topup: withClubModal(club.slug, "topup"),
           }}
-          leader={campaignContext.currentLeader}
-          product={defaultProduct}
+          leader={leaderLabel}
+          product={featuredProduct}
           recentActivity={defaultActivityItem}
         />
       </div>

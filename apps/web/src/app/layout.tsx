@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Archivo, Barlow_Condensed } from "next/font/google";
+import { AppProviders } from "@/components/app-providers";
 import "./globals.css";
 
 const interfaceFont = Archivo({
@@ -26,7 +27,7 @@ export default function RootLayout({
   return (
     <html data-scroll-behavior="smooth" lang="pt-BR">
       <body className={`${interfaceFont.variable} ${displayFont.variable}`}>
-        {children}
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

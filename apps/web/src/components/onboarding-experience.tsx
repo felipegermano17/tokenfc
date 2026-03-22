@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { clubs, normalizeSearchValue } from "@/lib/data";
+import { OnboardingContinueButton } from "@/components/onboarding-continue-button";
 import {
   ClubCrest,
   PageIntro,
@@ -104,12 +104,7 @@ export function OnboardingExperience() {
                 <strong>{selectedClub.name}</strong>
               </div>
             </div>
-            <Link
-              className="button button-primary"
-              href={`/activating?club=${selectedClub.slug}&auth=google`}
-            >
-              Continuar com {selectedClub.name}
-            </Link>
+            <OnboardingContinueButton clubName={selectedClub.name} clubSlug={selectedClub.slug} />
           </div>
         ) : null}
       </Surface>

@@ -4,10 +4,10 @@ import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
 import type { Club } from "@/lib/data";
 import { withClubModal } from "@/lib/club-routing";
+import { AuthStatusPill } from "@/components/auth-status-pill";
 import {
   BalanceCapsule,
   ClubCrest,
-  GoogleIdentityPill,
   TokenWordmark,
 } from "@/components/tokenfc-ui";
 
@@ -65,7 +65,7 @@ export function AppShell({
               Ranking geral
             </Link>
             <BalanceCapsule balance={balance} href={balanceHref} />
-            <GoogleIdentityPill />
+            <AuthStatusPill />
           </div>
         </div>
       </header>

@@ -14,19 +14,23 @@ function clubSignalTheme(club: Club): CSSProperties {
 export function ClubSignalBand({
   club,
   balance,
+  supportersCount,
+  totalPower,
 }: {
   club: Club;
   balance: number;
+  supportersCount?: number;
+  totalPower?: number;
 }) {
   const items = [
     {
       label: "Maior Torcida",
-      value: formatNumber(club.largestSupporters),
+      value: formatNumber(supportersCount ?? club.largestSupporters),
       detail: `#${club.supporterRank} no ecossistema`,
     },
     {
       label: "Torcida Mais Forte",
-      value: formatTfc(club.strongestFansTfc),
+      value: formatTfc(totalPower ?? club.strongestFansTfc),
       detail: `#${club.strongestFansRank} no ranking`,
     },
     {
