@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { appBalance, formatCurrency, formatTfc, topupOptions } from "@/lib/data";
 import { useAuthRuntime, useTokenFcSession } from "@/components/app-providers";
 import { Surface } from "@/components/tokenfc-ui";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 type FlowState = "review" | "pix" | "released";
 
@@ -33,7 +34,7 @@ function LiveCreditFlowPanel() {
   const [operation, setOperation] = useState<"create" | "approve" | null>(null);
   const [order, setOrder] = useState<LiveTopupOrder>(null);
   const { authenticated, approvePixTopup, createPixTopup, state } = useTokenFcSession();
-  const currentBalance = safeNumber(state?.balanceTfcRaw, appBalance.main);
+  const currentBalance = safeNumber(state?.balanceTfcRaw, 0);
   const displayedAmount = safeNumber(order?.tfcAmountRaw, selectedAmount);
   const projectedBalance = useMemo(
     () => currentBalance + displayedAmount,
@@ -430,14 +431,5 @@ function generatePixCode(amountTfc: number) {
 }
 
 function safeNumber(value: string | number | null | undefined, fallback: number) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : fallback;
-  }
-
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return normalizeTfcNumber(value, fallback);
 }

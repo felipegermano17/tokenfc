@@ -21,6 +21,7 @@ import {
 } from "@/components/tokenfc-ui";
 import { withClubModal } from "@/lib/club-routing";
 import { RankingOverview } from "@/components/ranking-overview";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 export type DashboardModalKey =
   | "campaign"
@@ -87,7 +88,7 @@ function ShopModalContent({
         id: products[0].id,
         name: products[0].name,
         note: "Produto ativo conectado ao catalogo seedado da demo.",
-        price: Number(products[0].priceTfcRaw),
+        price: normalizeTfcNumber(products[0].priceTfcRaw, defaultProduct.price),
       }
     : defaultProduct;
 

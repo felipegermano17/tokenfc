@@ -1,6 +1,11 @@
+"use client";
+
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
+import { useTokenFcSession } from "@/components/app-providers";
 import type { Club } from "@/lib/data";
 import { formatNumber, formatTfc } from "@/lib/data";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 function clubSignalTheme(club: Club): CSSProperties {
   return {
@@ -22,6 +27,11 @@ export function ClubSignalBand({
   supportersCount?: number;
   totalPower?: number;
 }) {
+  const { state } = useTokenFcSession();
+  const resolvedBalance = useMemo(
+    () => normalizeTfcNumber(state?.balanceTfcRaw, balance),
+    [balance, state?.balanceTfcRaw],
+  );
   const items = [
     {
       label: "Maior Torcida",
@@ -35,7 +45,7 @@ export function ClubSignalBand({
     },
     {
       label: "Seu saldo",
-      value: formatTfc(balance),
+      value: formatTfc(resolvedBalance),
       detail: "Disponivel para campanha ou compra",
     },
   ];

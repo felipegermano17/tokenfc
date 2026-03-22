@@ -4,21 +4,18 @@ import {
   PrivyProvider,
   usePrivy,
   useToken,
-  useWallets,
 } from "@privy-io/react-auth";
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
-  useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { monadTestnet } from "viem/chains";
 import type { ActivityItem } from "@/lib/data";
-import { mapPrivyWalletsForSession, tokenFcLoginMethods } from "@/lib/privy";
+import { tokenFcLoginMethods } from "@/lib/privy";
 
 type AuthRuntimeContextValue = {
   apiBaseUrl: string;
@@ -281,16 +278,9 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
   const { apiBaseUrl } = useAuthRuntime();
   const { authenticated, ready } = usePrivy();
   const { getAccessToken } = useToken();
-  const { wallets } = useWallets();
   const [state, setState] = useState<TokenFcAppState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const syncPromiseRef = useRef<Promise<TokenFcAppState | null> | null>(null);
-  const walletPayload = useMemo(() => mapPrivyWalletsForSession(wallets), [wallets]);
-  const walletFingerprint = useMemo(
-    () => JSON.stringify(walletPayload),
-    [walletPayload],
-  );
 
   const withAccessToken = useCallback(async () => {
     const accessToken = await getAccessToken();
@@ -331,47 +321,6 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     }
   }, [apiBaseUrl, authenticated, ready, withAccessToken]);
-
-  const syncSession = useCallback(async () => {
-    if (!ready || !authenticated) {
-      setState(null);
-      return null;
-    }
-
-    if (syncPromiseRef.current) {
-      return syncPromiseRef.current;
-    }
-
-    const promise = (async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const accessToken = await withAccessToken();
-        const payload = (await requestJson(`${apiBaseUrl}/auth/session`, {
-          accessToken,
-          body: { wallets: walletPayload },
-          method: "POST",
-        })) as TokenFcAppState & { ok: true };
-        const nextState = extractAppState(payload);
-        setState(nextState);
-        return nextState;
-      } catch (caughtError) {
-        const message =
-          caughtError instanceof Error
-            ? caughtError.message
-            : "Nao foi possivel preparar sua conta.";
-        setError(message);
-        return null;
-      } finally {
-        syncPromiseRef.current = null;
-        setLoading(false);
-      }
-    })();
-
-    syncPromiseRef.current = promise;
-    return promise;
-  }, [apiBaseUrl, authenticated, ready, walletPayload, withAccessToken]);
 
   const createPixTopup = useCallback(
     async (amountTfc: number) => {
@@ -455,8 +404,8 @@ function PrivyTokenFcSessionProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    void syncSession();
-  }, [authenticated, ready, syncSession, walletFingerprint]);
+    void refresh();
+  }, [authenticated, ready, refresh]);
 
   return (
     <TokenFcSessionContext.Provider

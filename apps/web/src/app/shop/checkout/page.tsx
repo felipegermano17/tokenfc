@@ -1,6 +1,5 @@
 import { AppShell } from "@/components/app-shell";
 import { CheckoutExperience } from "@/components/checkout-experience";
-import { appBalance } from "@/lib/data";
 import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub } from "@/lib/club-routing";
 
@@ -21,7 +20,7 @@ export default async function CheckoutPage({
     : undefined;
 
   return (
-    <AppShell activeClub={activeClub} balance={appBalance.afterTopup}>
+    <AppShell activeClub={activeClub} balance={0}>
       <CheckoutExperience product={selectedProduct} productId={params.product} />
     </AppShell>
   );

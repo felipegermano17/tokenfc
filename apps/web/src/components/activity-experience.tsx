@@ -1,16 +1,27 @@
 "use client";
 
-import { useTokenFcSession } from "@/components/app-providers";
+import { useAuthRuntime, useTokenFcSession } from "@/components/app-providers";
 import {
   ActivityLedgerTimeline,
   Surface,
 } from "@/components/tokenfc-ui";
 import { activityFeed, formatTfc } from "@/lib/data";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 export function ActivityExperience() {
+  const { privyEnabled } = useAuthRuntime();
   const { state } = useTokenFcSession();
   const activitySummary = state?.activitySummary;
-  const items = state?.activity?.length ? state.activity : activityFeed;
+  const items = privyEnabled ? state?.activity ?? [] : activityFeed;
+  const currentBalance = privyEnabled
+    ? normalizeTfcNumber(activitySummary?.currentBalanceTfcRaw, 0)
+    : 22;
+  const lastSupport = privyEnabled
+    ? normalizeTfcNumber(activitySummary?.lastSupportTfcRaw, 0)
+    : 10;
+  const lastOrder = privyEnabled
+    ? normalizeTfcNumber(activitySummary?.lastOrderTfcRaw, 0)
+    : 40;
 
   return (
     <div className="modal-stack">
@@ -22,15 +33,15 @@ export function ActivityExperience() {
         <div className="credit-flow-ledger">
           <div>
             <span>Saldo atual</span>
-            <strong>{formatTfc(Number(activitySummary?.currentBalanceTfcRaw ?? "22"))}</strong>
+            <strong>{formatTfc(currentBalance)}</strong>
           </div>
           <div>
             <span>Ultimo apoio</span>
-            <strong>{formatTfc(Number(activitySummary?.lastSupportTfcRaw ?? "10"))}</strong>
+            <strong>{formatTfc(lastSupport)}</strong>
           </div>
           <div>
             <span>Ultima compra</span>
-            <strong>{formatTfc(Number(activitySummary?.lastOrderTfcRaw ?? "40"))}</strong>
+            <strong>{formatTfc(lastOrder)}</strong>
           </div>
         </div>
       </Surface>
@@ -40,7 +51,11 @@ export function ActivityExperience() {
           <p>Linha do tempo</p>
           <span>Ultimos movimentos confirmados</span>
         </div>
-        <ActivityLedgerTimeline items={items} />
+        {items.length ? (
+          <ActivityLedgerTimeline items={items} />
+        ) : (
+          <p>A atividade aparece aqui assim que voce concluir sua primeira acao.</p>
+        )}
       </Surface>
     </div>
   );

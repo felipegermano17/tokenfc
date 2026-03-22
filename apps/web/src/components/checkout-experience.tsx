@@ -10,6 +10,7 @@ import {
   getProductById,
 } from "@/lib/data";
 import { CheckoutLedgerSummary, Surface } from "@/components/tokenfc-ui";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 export function CheckoutExperience({
   product,
@@ -40,11 +41,14 @@ function LiveCheckoutExperience({
   const [error, setError] = useState<string | null>(null);
   const { authenticated, checkoutProduct, state } = useTokenFcSession();
   const amount = safeNumber(product.priceTfcRaw, defaultProduct.price);
-  const currentBalance = safeNumber(state?.balanceTfcRaw, appBalance.afterTopup);
+  const currentBalance = safeNumber(state?.balanceTfcRaw, 0);
   const afterBalance = useMemo(
     () => Math.max(currentBalance - amount, 0),
     [amount, currentBalance],
   );
+  const confirmDisabled =
+    status === "processing" ||
+    (authenticated && Boolean(state?.membership) && currentBalance < amount);
 
   async function handleCheckout() {
     if (!authenticated) {
@@ -88,6 +92,7 @@ function LiveCheckoutExperience({
       onCheckout={() => void handleCheckout()}
       productName={product.name}
       productNote="Produto ativo conectado ao catalogo seedado da demo."
+      confirmDisabled={confirmDisabled}
       status={status}
     />
   );
@@ -139,6 +144,7 @@ function CheckoutCanvas({
   detail,
   error,
   onCheckout,
+  confirmDisabled,
   productName,
   productNote,
   status,
@@ -149,6 +155,7 @@ function CheckoutCanvas({
   detail: string;
   error: string | null;
   onCheckout: () => void;
+  confirmDisabled?: boolean;
   productName: string;
   productNote: string;
   status: "idle" | "processing" | "done";
@@ -181,7 +188,7 @@ function CheckoutCanvas({
                 ? "button button-primary button-success"
                 : "button button-primary"
             }
-            disabled={status === "processing"}
+            disabled={confirmDisabled ?? status === "processing"}
             onClick={onCheckout}
             type="button"
           >
@@ -227,7 +234,5 @@ function CheckoutCanvas({
 }
 
 function safeNumber(value: string | undefined, fallback: number) {
-  const parsed = Number(value);
-
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return normalizeTfcNumber(value, fallback);
 }

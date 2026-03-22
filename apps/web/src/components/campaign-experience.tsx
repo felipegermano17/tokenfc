@@ -14,6 +14,7 @@ import {
   type Club,
 } from "@/lib/data";
 import { CampaignFocusStage, JerseyArtwork, Surface } from "@/components/tokenfc-ui";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 const supportPresets = [3, 5, 10, 20];
 const liveGradients: Array<[string, string]> = [
@@ -87,7 +88,7 @@ function LiveCampaignExperience({
         name: design.title,
         summary: `Criada por ${design.creatorLabel} e acompanhada em tempo real dentro da campanha ativa.`,
         supporters: design.supportersCount,
-        totalTfc: Number(design.totalTfcRaw),
+        totalTfc: normalizeTfcNumber(design.totalTfcRaw),
       })),
     [localContest.designs],
   );
@@ -95,9 +96,13 @@ function LiveCampaignExperience({
   const lockedDesignId =
     latestSupport?.contestId === localContest.id ? latestSupport.designId : null;
   const selectedArt = liveArts.find((art) => art.id === selectedArtId) ?? liveArts[0];
-  const currentBalance = safeNumber(state?.balanceTfcRaw, appBalance.main);
+  const currentBalance = safeNumber(state?.balanceTfcRaw, 0);
   const afterBalance = Math.max(currentBalance - supportAmount, 0);
   const nextTotal = selectedArt ? selectedArt.totalTfc + supportAmount : supportAmount;
+  const confirmDisabled =
+    status === "processing" ||
+    !selectedArt ||
+    (authenticated && Boolean(state?.membership) && currentBalance < supportAmount);
 
   useEffect(() => {
     setLocalContest(contest);
@@ -204,6 +209,7 @@ function LiveCampaignExperience({
         setError(null);
         setSupportAmount(amount);
       }}
+      confirmDisabled={confirmDisabled}
       selectedArt={selectedArt}
       selectedArtId={selectedArtId}
       status={status}
@@ -243,6 +249,7 @@ function LocalCampaignExperience({
       arts={contestArts}
       club={club}
       compact={compact}
+      confirmDisabled={false}
       currentBalance={appBalance.main}
       error={null}
       lockedDesignId={null}
@@ -304,6 +311,7 @@ function CampaignCanvas({
   onConfirm,
   onSelectArt,
   onSelectAmount,
+  confirmDisabled,
   selectedArt,
   selectedArtId,
   status,
@@ -320,6 +328,7 @@ function CampaignCanvas({
   onConfirm: () => void;
   onSelectArt: (artId: string) => void;
   onSelectAmount: (amount: number) => void;
+  confirmDisabled: boolean;
   selectedArt?: CampaignArtView;
   selectedArtId: string;
   status: "idle" | "processing" | "done";
@@ -443,7 +452,7 @@ function CampaignCanvas({
                   ? "button button-primary button-success campaign-modal-confirm"
                   : "button button-primary campaign-modal-confirm"
               }
-              disabled={status === "processing"}
+              disabled={confirmDisabled}
               onClick={onConfirm}
               type="button"
             >
@@ -530,7 +539,7 @@ function CampaignCanvas({
                 ? "button button-primary button-success"
                 : "button button-primary"
             }
-            disabled={status === "processing"}
+            disabled={confirmDisabled}
             onClick={onConfirm}
             type="button"
           >
@@ -621,7 +630,5 @@ function updateContestAfterSupport(
 }
 
 function safeNumber(value: string | undefined, fallback: number) {
-  const parsed = Number(value);
-
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return normalizeTfcNumber(value, fallback);
 }

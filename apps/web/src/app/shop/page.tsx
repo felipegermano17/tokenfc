@@ -1,8 +1,9 @@
 import { AppShell } from "@/components/app-shell";
 import { LinkButton, PageIntro, ProductSpotlightCard, Surface } from "@/components/tokenfc-ui";
-import { appBalance, defaultProduct, products } from "@/lib/data";
+import { defaultProduct, products } from "@/lib/data";
 import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub } from "@/lib/club-routing";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 export default async function ShopPage({
   searchParams,
@@ -17,7 +18,7 @@ export default async function ShopPage({
     id: product.id,
     name: product.name,
     note: "Produto ativo conectado ao catalogo seedado da demo.",
-    price: Number(product.priceTfcRaw),
+    price: normalizeTfcNumber(product.priceTfcRaw),
   }));
   const hasLiveCatalog = Boolean(dashboard && dashboard.shopProducts.length > 0);
   const spotlightProduct = hasLiveCatalog ? liveProducts?.[0] ?? defaultProduct : defaultProduct;
@@ -29,7 +30,7 @@ export default async function ShopPage({
         : products.slice(1);
 
   return (
-    <AppShell activeClub={activeClub} balance={appBalance.afterTopup}>
+    <AppShell activeClub={activeClub} balance={0}>
       <div className="stack-2xl">
         <PageIntro
           eyebrow="Loja oficial"

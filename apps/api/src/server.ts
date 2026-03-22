@@ -778,7 +778,7 @@ app.post("/shop/checkout", async (request, reply) => {
     }
 
     const balanceTfcRaw = await getUserBalanceRawWithClient(tx, user.id);
-    const priceTfcRaw = BigInt(product.priceTfcRaw.toString());
+    const priceTfcRaw = normalizeStoredTfcAmount(product.priceTfcRaw);
 
     if (balanceTfcRaw < priceTfcRaw) {
       return {
@@ -872,7 +872,7 @@ app.post("/shop/checkout", async (request, reply) => {
       customerStatus: result.order.customerStatus,
       fulfillmentStatus: result.order.fulfillmentStatus,
       id: result.order.id,
-      priceTfcRaw: result.order.priceTfcRaw.toString(),
+      priceTfcRaw: serializeStoredTfcAmount(result.order.priceTfcRaw),
       productId: result.order.productId,
       productName: result.order.product.name,
     },
@@ -1107,7 +1107,7 @@ app.get("/clubs/:slug/dashboard", async (request, reply) => {
       sku: product.sku,
       name: product.name,
       imageUrl: product.imageUrl,
-      priceTfcRaw: product.priceTfcRaw.toString(),
+      priceTfcRaw: serializeStoredTfcAmount(product.priceTfcRaw),
     })),
   };
 });
@@ -1422,7 +1422,9 @@ async function buildUserActivityData(userId: string) {
     ),
     activitySummary: {
       currentBalanceTfcRaw: currentBalanceTfcRaw.toString(),
-      lastOrderTfcRaw: latestOrder?.priceTfcRaw.toString() ?? "0",
+      lastOrderTfcRaw: latestOrder
+        ? serializeStoredTfcAmount(latestOrder.priceTfcRaw)
+        : "0",
       lastSupportTfcRaw: latestSupport?.incrementTfcRaw.toString() ?? "0",
       lastTopupTfcRaw: latestTopup?.tfcAmountRaw.toString() ?? "0",
     },
@@ -1431,7 +1433,7 @@ async function buildUserActivityData(userId: string) {
           customerStatus: latestOrder.customerStatus,
           fulfillmentStatus: latestOrder.fulfillmentStatus,
           id: latestOrder.id,
-          priceTfcRaw: latestOrder.priceTfcRaw.toString(),
+          priceTfcRaw: serializeStoredTfcAmount(latestOrder.priceTfcRaw),
           productId: latestOrder.productId,
           productName: latestOrder.product.name,
         }
@@ -1547,6 +1549,7 @@ async function enqueueWorkerIntent(
         "content-type": "application/json",
         ...authHeaders,
       },
+      body: "{}",
     });
 
     if (!response.ok) {
@@ -1588,6 +1591,25 @@ async function getWorkerRequestHeaders() {
 function generatePixCode(amountTfc: number) {
   const amountBlock = String(amountTfc).padStart(3, "0");
   return `00020126580014BR.GOV.BCB.PIX0136TOKENFC-PIX${amountBlock}5204000053039865802BR5925TOKEN FC PIX6009SAO PAULO62070503***6304ABCD`;
+}
+
+function normalizeStoredTfcAmount(value: { toString(): string } | string | bigint | number) {
+  const parsedValue =
+    typeof value === "bigint"
+      ? value
+      : typeof value === "number"
+        ? BigInt(Math.trunc(value))
+        : BigInt(value.toString());
+
+  if (parsedValue >= ONE_TFC_ONCHAIN && parsedValue % ONE_TFC_ONCHAIN === 0n) {
+    return parsedValue / ONE_TFC_ONCHAIN;
+  }
+
+  return parsedValue;
+}
+
+function serializeStoredTfcAmount(value: { toString(): string } | string | bigint | number) {
+  return normalizeStoredTfcAmount(value).toString();
 }
 
 async function syncClubMetricsSupporterCount(

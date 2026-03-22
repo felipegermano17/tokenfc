@@ -1,7 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { ActivityExperience } from "@/components/activity-experience";
 import { PageIntro } from "@/components/tokenfc-ui";
-import { appBalance } from "@/lib/data";
 import { resolveActiveClub } from "@/lib/club-routing";
 
 export default async function ActivityPage({
@@ -13,7 +12,7 @@ export default async function ActivityPage({
   const activeClub = resolveActiveClub(undefined, params.club);
 
   return (
-    <AppShell activeClub={activeClub} balance={appBalance.afterPurchase}>
+    <AppShell activeClub={activeClub} balance={0}>
       <div className="stack-2xl">
         <PageIntro
           eyebrow="Memoria do ecossistema"

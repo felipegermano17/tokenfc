@@ -20,7 +20,8 @@ import {
 } from "@/lib/data";
 import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub, withClubModal } from "@/lib/club-routing";
-import { ClubHero } from "@/components/tokenfc-ui";
+import { LiveClubHero } from "@/components/live-club-hero";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 export const dynamic = "force-dynamic";
 
@@ -58,12 +59,12 @@ export default async function ClubPage({
       (product) => product.id === query.product || product.sku === query.product,
     ) ?? featuredShopProduct;
   const featuredProduct = featuredShopProduct
-    ? {
-        emphasis: "Destaque",
-        id: featuredShopProduct.id,
-        name: featuredShopProduct.name,
-        note: "Produto ativo conectado ao catalogo seedado da demo.",
-        price: Number(featuredShopProduct.priceTfcRaw),
+      ? {
+          emphasis: "Destaque",
+          id: featuredShopProduct.id,
+          name: featuredShopProduct.name,
+          note: "Produto ativo conectado ao catalogo seedado da demo.",
+          price: normalizeTfcNumber(featuredShopProduct.priceTfcRaw, defaultProduct.price),
       }
     : defaultProduct;
   const activeProduct =
@@ -74,7 +75,7 @@ export default async function ClubPage({
           id: selectedShopProduct.id,
           name: selectedShopProduct.name,
           note: "Produto ativo conectado ao catalogo seedado da demo.",
-          price: Number(selectedShopProduct.priceTfcRaw),
+          price: normalizeTfcNumber(selectedShopProduct.priceTfcRaw, defaultProduct.price),
         }
       : featuredProduct);
   const leaderLabel = dashboard?.contest?.designs[0]?.title ?? campaignContext.currentLeader;
@@ -101,7 +102,7 @@ export default async function ClubPage({
   return (
     <AppShell
       activeClub={club}
-      balance={appBalance.main}
+      balance={0}
       mainClassName="app-main-club"
       shellClassName="app-shell-club"
     >
@@ -109,8 +110,8 @@ export default async function ClubPage({
         aria-hidden={activeModal ? true : undefined}
         className={activeModal ? "club-dashboard-page dashboard-underlay stack-2xl" : "club-dashboard-page stack-2xl"}
       >
-        <ClubHero
-          balance={appBalance.main}
+        <LiveClubHero
+          balance={0}
           club={club}
           context={heroContext}
           copy={heroCopy}
@@ -120,7 +121,7 @@ export default async function ClubPage({
         />
 
         <ClubSignalBand
-          balance={appBalance.main}
+          balance={0}
           club={club}
           supportersCount={dashboard?.metrics.supportersCount}
           totalPower={
@@ -129,7 +130,7 @@ export default async function ClubPage({
         />
 
         <ClubActionDeck
-          balance={appBalance.main}
+          balance={0}
           campaignTimeLeft={campaignContext.timeLeft}
           club={club}
           hrefs={{

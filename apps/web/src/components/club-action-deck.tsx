@@ -1,7 +1,12 @@
+"use client";
+
 import Link from "next/link";
+import { useMemo } from "react";
+import { useTokenFcSession } from "@/components/app-providers";
 import type { CSSProperties } from "react";
 import type { ActivityItem, Club, Product } from "@/lib/data";
 import { formatTfc } from "@/lib/data";
+import { normalizeTfcNumber } from "@/lib/tfc";
 
 function clubActionTheme(club: Club): CSSProperties {
   return {
@@ -34,6 +39,24 @@ export function ClubActionDeck({
     activity: string;
   };
 }) {
+  const { state } = useTokenFcSession();
+  const resolvedBalance = useMemo(
+    () => normalizeTfcNumber(state?.balanceTfcRaw, balance),
+    [balance, state?.balanceTfcRaw],
+  );
+  const hasLiveSession = Boolean(state);
+  const resolvedActivity = state?.activity?.[0] ?? (
+    hasLiveSession
+      ? {
+          amount: "$0 TFC",
+          detail: "Quando voce creditar saldo, apoiar campanha ou comprar, tudo aparece aqui.",
+          status: "Conta pronta",
+          time: "Agora",
+          title: "Nenhuma atividade ainda",
+        }
+      : recentActivity
+  );
+
   return (
     <section
       aria-label="Escolha sua proxima acao"
@@ -61,7 +84,7 @@ export function ClubActionDeck({
               <span>Comprar TFC</span>
               <em>PIX</em>
             </div>
-            <strong>{formatTfc(balance)}</strong>
+            <strong>{formatTfc(resolvedBalance)}</strong>
             <p>Credite saldo sem sair do clube.</p>
             <div className="club-command-topup-footer">
               <span className="club-command-cta club-command-cta-inverse club-command-cta-inverse-soft">
@@ -86,11 +109,11 @@ export function ClubActionDeck({
             <Link className="club-command-row club-command-row-activity" href={hrefs.activity}>
               <div className="club-command-row-copy">
                 <span>Atividade</span>
-                <strong>{recentActivity.title}</strong>
-                <p>{recentActivity.detail}</p>
+                <strong>{resolvedActivity.title}</strong>
+                <p>{resolvedActivity.detail}</p>
               </div>
               <div className="club-command-row-meta">
-                <small>{recentActivity.amount}</small>
+                <small>{resolvedActivity.amount}</small>
                 <span className="club-command-cta club-command-cta-plain">Ver atividade</span>
               </div>
             </Link>

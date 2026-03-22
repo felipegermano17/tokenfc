@@ -2,10 +2,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../src/index.js";
 import { demoContest, demoProducts, featuredClubs } from "../src/demo-data.js";
 
-const TFC_DECIMALS = 10n ** 18n;
-
-function toRawTfc(value: bigint) {
-  return new Prisma.Decimal((value * TFC_DECIMALS).toString());
+function toStoredTfc(value: bigint) {
+  return new Prisma.Decimal(value.toString());
 }
 
 async function seedClubs() {
@@ -131,7 +129,7 @@ async function seedProducts() {
       update: {
         clubId: club.id,
         name: product.name,
-        priceTfcRaw: toRawTfc(product.priceTfc),
+        priceTfcRaw: toStoredTfc(product.priceTfc),
         imageUrl: product.imageUrl,
         isActive: true,
       },
@@ -139,7 +137,7 @@ async function seedProducts() {
         clubId: club.id,
         name: product.name,
         sku: product.sku,
-        priceTfcRaw: toRawTfc(product.priceTfc),
+        priceTfcRaw: toStoredTfc(product.priceTfc),
         imageUrl: product.imageUrl,
         isActive: true,
       },
