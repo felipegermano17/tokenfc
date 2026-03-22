@@ -3,6 +3,8 @@ import { Archivo, Barlow_Condensed } from "next/font/google";
 import { AppProviders } from "@/components/app-providers";
 import "./globals.css";
 
+export const dynamic = "force-dynamic";
+
 const interfaceFont = Archivo({
   variable: "--font-interface",
   subsets: ["latin"],
