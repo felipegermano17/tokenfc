@@ -1,0 +1,13 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - ${_DOCKERFILE}
+      - -t
+      - ${_IMAGE}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}

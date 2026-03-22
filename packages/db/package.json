@@ -11,7 +11,7 @@
     "./demo-data": "./dist/src/demo-data.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json",
     "lint": "prisma validate && tsc --noEmit -p tsconfig.json",
     "prisma": "prisma",
     "seed": "tsx prisma/seed.ts"

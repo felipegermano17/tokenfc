@@ -12,7 +12,10 @@ import {
 } from "./contracts.js";
 
 const host = process.env.WORKER_HOST ?? "0.0.0.0";
-const port = z.coerce.number().default(4100).parse(process.env.WORKER_PORT ?? "4100");
+const port = z.coerce
+  .number()
+  .default(4100)
+  .parse(process.env.PORT ?? process.env.WORKER_PORT ?? "4100");
 const rpcUrl =
   resolveFirstEnv(["MONAD_RPC_URL", "TOKENFC_MONAD_RPC_URL", "RPC_URL"]) ??
   monadTestnet.rpcUrls.default.http[0];

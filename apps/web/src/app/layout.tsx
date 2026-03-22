@@ -24,10 +24,21 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const apiBaseUrl =
+    process.env.API_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_URL?.trim() ||
+    "http://127.0.0.1:4000";
+  const privyAppId =
+    process.env.PRIVY_APP_ID?.trim() ||
+    process.env.NEXT_PUBLIC_PRIVY_APP_ID?.trim() ||
+    null;
+
   return (
     <html data-scroll-behavior="smooth" lang="pt-BR">
       <body className={`${interfaceFont.variable} ${displayFont.variable}`}>
-        <AppProviders>{children}</AppProviders>
+        <AppProviders apiBaseUrl={apiBaseUrl} privyAppId={privyAppId}>
+          {children}
+        </AppProviders>
       </body>
     </html>
   );

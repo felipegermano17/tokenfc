@@ -110,9 +110,6 @@ const TokenFcSessionContext = createContext<TokenFcSessionContextValue>({
   refresh: async () => null,
 });
 
-const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID?.trim();
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() || "http://127.0.0.1:4000";
-
 export function useAuthRuntime() {
   return useContext(AuthRuntimeContext);
 }
@@ -121,7 +118,15 @@ export function useTokenFcSession() {
   return useContext(TokenFcSessionContext);
 }
 
-export function AppProviders({ children }: { children: ReactNode }) {
+export function AppProviders({
+  children,
+  apiBaseUrl = "http://127.0.0.1:4000",
+  privyAppId = null,
+}: {
+  children: ReactNode;
+  apiBaseUrl?: string;
+  privyAppId?: string | null;
+}) {
   const runtime = {
     apiBaseUrl,
     privyEnabled: Boolean(privyAppId),

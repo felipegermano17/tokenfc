@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
+import { GoogleAuth } from "google-auth-library";
 import { PrivyClient } from "@privy-io/node";
 import { prisma } from "@tokenfc/db";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -7,9 +8,13 @@ import { z } from "zod";
 import deployments from "../../../packages/contracts/deployments/monad-testnet.json" with { type: "json" };
 
 const host = process.env.API_HOST ?? "0.0.0.0";
-const port = z.coerce.number().default(4000).parse(process.env.API_PORT ?? "4000");
+const port = z.coerce
+  .number()
+  .default(4000)
+  .parse(process.env.PORT ?? process.env.API_PORT ?? "4000");
 const workerUrl =
   resolveFirstEnv(["WORKER_URL", "TOKENFC_WORKER_URL"]) ?? "http://127.0.0.1:4100";
+const googleAuth = workerUrl.startsWith("https://") ? new GoogleAuth() : null;
 const privyAppId = resolveFirstEnv([
   "PRIVY_APP_ID",
   "NEXT_PUBLIC_PRIVY_APP_ID",
@@ -746,10 +751,12 @@ async function enqueueWorkerIntent(
   },
 ) {
   try {
+    const authHeaders = await getWorkerRequestHeaders();
     const response = await fetch(`${workerUrl}/jobs/intents/${intentId}/process`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        ...authHeaders,
       },
     });
 
@@ -777,6 +784,16 @@ async function enqueueWorkerIntent(
     );
     return null;
   }
+}
+
+async function getWorkerRequestHeaders() {
+  if (!googleAuth) {
+    return {};
+  }
+
+  const client = await googleAuth.getIdTokenClient(workerUrl);
+  const headers = await client.getRequestHeaders(workerUrl);
+  return Object.fromEntries(headers.entries());
 }
 
 function generatePixCode(amountTfc: number) {
