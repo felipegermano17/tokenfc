@@ -26,7 +26,7 @@ export function CheckoutExperience({
   }
 
   if (product === null) {
-    return <EmptyCheckoutExperience />;
+    return productId ? <LocalCheckoutExperience productId={productId} /> : <EmptyCheckoutExperience />;
   }
 
   return <LiveCheckoutExperience product={product} />;

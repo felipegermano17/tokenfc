@@ -74,14 +74,6 @@ function ShopModalContent({
   club: Club;
   products?: ClubDashboardShopProduct[];
 }) {
-  if (products && products.length === 0) {
-    return (
-      <div className="modal-stack">
-        <p>Nenhum produto esta liberado neste clube agora.</p>
-      </div>
-    );
-  }
-
   const spotlightProduct = products?.[0]
     ? {
         emphasis: "Destaque",

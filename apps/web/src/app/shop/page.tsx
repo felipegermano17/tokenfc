@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/app-shell";
-import { LinkButton, PageIntro, ProductSpotlightCard, Surface } from "@/components/tokenfc-ui";
-import { defaultProduct, products } from "@/lib/data";
+import { PageIntro, ProductSpotlightCard, Surface } from "@/components/tokenfc-ui";
+import { defaultProduct } from "@/lib/data";
 import { getClubDashboard } from "@/lib/api";
 import { resolveActiveClub } from "@/lib/club-routing";
 import { normalizeTfcNumber } from "@/lib/tfc";
@@ -22,12 +22,9 @@ export default async function ShopPage({
   }));
   const hasLiveCatalog = Boolean(dashboard && dashboard.shopProducts.length > 0);
   const spotlightProduct = hasLiveCatalog ? liveProducts?.[0] ?? defaultProduct : defaultProduct;
-  const additionalProducts =
-    hasLiveCatalog && liveProducts && liveProducts.length > 1
-      ? liveProducts.slice(1)
-      : dashboard
-        ? []
-        : products.slice(1);
+  const checkoutHref = activeClub
+    ? `/shop/checkout?club=${activeClub.slug}&product=${spotlightProduct.id}`
+    : undefined;
 
   return (
     <AppShell activeClub={activeClub} balance={0}>
@@ -46,22 +43,12 @@ export default async function ShopPage({
           }
         />
 
-        {activeClub && hasLiveCatalog ? (
+        {activeClub ? (
           <ProductSpotlightCard
             club={activeClub}
-            href={`/shop/checkout?club=${activeClub.slug}&product=${spotlightProduct.id}`}
+            href={checkoutHref ?? "/shop"}
             product={spotlightProduct}
           />
-        ) : activeClub && dashboard ? (
-          <Surface className="shop-support">
-            <div className="section-heading">
-              <p>Catalogo do clube</p>
-              <span>Nenhum item liberado agora</span>
-            </div>
-            <p>
-              Quando um produto entrar no ar para este clube, ele aparece aqui no mesmo fluxo da compra.
-            </p>
-          </Surface>
         ) : (
           <Surface className="shop-support">
             <div className="section-heading">
@@ -76,29 +63,10 @@ export default async function ShopPage({
 
         <Surface className="shop-support">
           <div className="section-heading">
-            <p>Mais itens do clube</p>
-            <span>Itens liberados nesta janela</span>
+            <p>Item liberado agora</p>
+            <span>Uma unica compra para manter a demo direta</span>
           </div>
-          {additionalProducts.length ? (
-            <div className="credit-flow-ledger">
-              {additionalProducts.map((product) => (
-                <div key={product.id}>
-                  <span>{product.emphasis}</span>
-                  <strong>{product.name}</strong>
-                  <p>{product.note}</p>
-                  {activeClub ? (
-                    <LinkButton href={`/shop/checkout?club=${activeClub.slug}&product=${product.id}`} variant="secondary">
-                      {product.price} TFC
-                    </LinkButton>
-                  ) : (
-                    <strong>{product.price} TFC</strong>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>Nao ha outros itens liberados para este clube agora.</p>
-          )}
+          <p>Esta demo deixa uma unica camisa em destaque para simplificar a jornada de compra.</p>
         </Surface>
       </div>
     </AppShell>
